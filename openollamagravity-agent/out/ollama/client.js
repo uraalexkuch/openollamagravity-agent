@@ -39,7 +39,7 @@ exports.OllamaClient = exports.oogLogger = void 0;
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
 const https = __importStar(require("https"));
-// ── Канал виводу для технічного моніторингу ──
+// ── Глобальний канал виводу для технічного моніторингу ──
 exports.oogLogger = vscode.window.createOutputChannel('OOG Agent Log');
 function cfg(key, def) {
     return vscode.workspace.getConfiguration('openollamagravity').get(key, def);
@@ -53,6 +53,7 @@ class OllamaClient {
         const name = modelName.toLowerCase();
         const hardwareLimit = cfg('maxDynamicContext', 32768);
         let ctxSize = cfg('baseContextSize', 4096);
+        // Моделі з великим вікном контексту (128k+)
         if (name.includes('llama3.2') || name.includes('qwen') || name.includes('deepseek')) {
             ctxSize = Math.min(131072, hardwareLimit);
         }
@@ -120,7 +121,7 @@ class OllamaClient {
                                 onChunk(tok);
                             }
                             if (j.done) {
-                                exports.oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ✅ Отримано токенів за ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
+                                exports.oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ✅ Отримано повну відповідь за ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
                                 resolve(full);
                             }
                         }

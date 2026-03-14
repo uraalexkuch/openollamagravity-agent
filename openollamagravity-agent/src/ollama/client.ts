@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 
-// ── Канал виводу для технічного моніторингу ──
+// ── Глобальний канал виводу для технічного моніторингу ──
 export const oogLogger = vscode.window.createOutputChannel('OOG Agent Log');
 
 export interface OllamaMessage {
@@ -34,6 +34,7 @@ export class OllamaClient {
     const hardwareLimit = cfg<number>('maxDynamicContext', 32768);
     let ctxSize = cfg<number>('baseContextSize', 4096);
 
+    // Моделі з великим вікном контексту (128k+)
     if (name.includes('llama3.2') || name.includes('qwen') || name.includes('deepseek')) {
       ctxSize = Math.min(131072, hardwareLimit);
     } else if (name.includes('llama3')) {
@@ -101,7 +102,7 @@ export class OllamaClient {
               const tok = j?.message?.content ?? '';
               if (tok) { full += tok; onChunk(tok); }
               if (j.done) {
-                oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ✅ Отримано токенів за ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
+                oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ✅ Отримано повну відповідь за ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
                 resolve(full);
               }
             } catch { /* parse error */ }

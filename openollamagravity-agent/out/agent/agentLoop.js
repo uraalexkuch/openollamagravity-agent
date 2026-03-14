@@ -36,24 +36,25 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentLoop = void 0;
 const vscode = __importStar(require("vscode"));
+const client_1 = require("../ollama/client");
 const Tools = __importStar(require("./tools"));
 const getToolsSchema = (language) => `
-You are an autonomous coding agent. Use <tool_call> tags.
-CRITICAL: For 'path' or 'cwd', ALWAYS use absolute Windows paths like "D:\\\\web_project\\\\...".
+You are an autonomous coding agent.
+CRITICAL: To call a tool, use XML: <tool_call><name>TOOL_NAME</name><args>{"arg": "val"}</args></tool_call>.
 
 TOOLS:
 1. list_files({"path": "...", "depth": 3})
 2. read_file({"path": "..."})
 3. write_file({"path": "...", "content": "..."})
-4. edit_file({"path": "...", "start_line": N, "end_line": N, "new_content": "..."})
-5. run_terminal({"command": "...", "cwd": "..."})
+4. run_terminal({"command": "...", "cwd": "..."})
+5. create_directory({"path": "..."})
 6. list_skills({})
 7. read_skill({"name": "..."})
 
 RULES:
 - Reply in ${language}.
-- Use valid JSON for arguments.
-- Call only ONE tool per turn.
+- CROSS-PROJECT: Use absolute paths like "D:\\\\web_project\\\\...".
+- SKILLS: ALWAYS call list_skills({}) as your VERY FIRST step for any new project.
 `.trim();
 function parseToolCall(text) {
     const nameMatch = text.match(/<name>\s*([\w_]+)\s*<\/name>/i) || text.match(/"?name"?\s*:\s*"?([\w_]+)"?/i);
@@ -63,13 +64,13 @@ function parseToolCall(text) {
     let argsText = '';
     const argsMatch = text.match(/<args>([\s\S]*?)<\/args>/i) || text.match(/\{[\s\S]*\}/);
     if (argsMatch)
-        argsText = (Array.isArray(argsMatch) ? argsMatch[1] || argsMatch[0] : argsMatch).trim();
-    if (!argsText || argsText === '{}')
+        argsText = (Array.isArray(argsMatch) ? (argsMatch[1] || argsMatch[0]) : argsMatch).trim();
+    if (!argsText || argsText === '{}' || !argsText.includes('{'))
         return { name, args: {} };
     try {
-        // Автоматичне виправлення бекслешів у Windows шляхах перед JSON.parse
-        argsText = argsText.replace(/"(path|cwd|file_pattern)"\s*:\s*"([^"]+)"/g, (m, k, v) => `"${k}": "${v.replace(/\\/g, '\\\\').replace(/\\\\\\\\/g, '\\\\')}"`);
-        return { name, args: JSON.parse(argsText) };
+        // Виправлення Windows шляхів (подвоєння бекслешів) перед парсингом JSON
+        const fixedJson = argsText.replace(/"(path|cwd|file_pattern)"\s*:\s*"([^"]+)"/g, (m, k, v) => `"${k}": "${v.replace(/\\/g, '\\\\').replace(/\\\\\\\\/g, '\\\\')}"`);
+        return { name, args: JSON.parse(fixedJson) };
     }
     catch {
         return { name, args: {} };
@@ -86,32 +87,22 @@ class AgentLoop {
     off(fn) { this._listeners = this._listeners.filter(l => l !== fn); }
     emit(ev) { this._listeners.forEach(l => l(ev)); }
     stop() { this._abortCtrl?.abort(); this.running = false; }
-    clearHistory() { this._history = []; }
+    clearHistory() { this._history = []; client_1.oogLogger.appendLine('\n[Agent] Контекст очищено.'); }
     async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian') {
         this.running = true;
         this._abortCtrl = new AbortController();
         const signal = this._abortCtrl.signal;
-        const maxSteps = vscode.workspace.getConfiguration('openollamagravity').get('maxAgentSteps', 25);
-        // Auto-matching skills
-        let finalTask = task;
-        try {
-            const skillsRes = await Tools.listSkills();
-            if (skillsRes.ok) {
-                const matches = skillsRes.output.split('\n')
-                    .filter(s => s.endsWith('.md') && new RegExp(`\\b${s.split('/').pop()?.replace('.md', '')}\\b`, 'i').test(task));
-                if (matches.length)
-                    finalTask += `\n\n[SYSTEM HINT]: Read these skills first:\n${matches.map(m => `- read_skill({"name": "${m}"})`).join('\n')}`;
-            }
-        }
-        catch { }
+        const maxSteps = vscode.workspace.getConfiguration('openollamagravity').get('maxAgentSteps', 50);
         const sysPrompt = getToolsSchema(language) + (workspaceContext ? `\n\nWORKSPACE:\n${workspaceContext}` : '');
         if (!this._history.length)
             this._history.push({ role: 'system', content: sysPrompt });
-        this._history.push({ role: 'user', content: finalTask });
+        this._history.push({ role: 'user', content: task });
+        client_1.oogLogger.appendLine(`\n🎯 ЗАВДАННЯ: ${task}`);
         for (let step = 1; step <= maxSteps; step++) {
             if (signal.aborted)
                 break;
             this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
+            client_1.oogLogger.appendLine(`\n--- Крок ${step} / ${maxSteps} ---`);
             let output = '';
             try {
                 output = await this._streamWithTimeout(step, maxSteps, signal);
@@ -125,20 +116,23 @@ class AgentLoop {
                 this.emit({ type: 'answer', content: output });
                 break;
             }
+            client_1.oogLogger.appendLine(`[Agent] ВИКЛИК: ${tool.name}`);
             this.emit({ type: 'tool_call', content: `Calling: ${tool.name}`, toolName: tool.name, toolArgs: tool.args });
             const res = await this.executeTool(tool.name, tool.args);
+            client_1.oogLogger.appendLine(`[Agent] РЕЗУЛЬТАТ: ${res.ok ? 'OK' : 'FAIL'}`);
             this.emit({ type: 'tool_result', content: res.output, toolName: tool.name, ok: res.ok });
             this._history.push({ role: 'assistant', content: output });
-            this._history.push({ role: 'user', content: `<tool_result><name>${tool.name}</name><ok>${res.ok}</ok><output>${res.output}</output></tool_result>` });
+            this._history.push({ role: 'user', content: `<tool_result>\n<name>${tool.name}</name>\n<ok>${res.ok}</ok>\n<output>${res.output}</output>\n</tool_result>` });
         }
         this.running = false;
+        this.emit({ type: 'done', content: 'Done' });
     }
     async _streamWithTimeout(step, totalSteps, signal) {
         const timeoutSec = vscode.workspace.getConfiguration('openollamagravity').get('firstTokenTimeoutSec', 180);
         return new Promise((resolve, reject) => {
             let first = false;
             const h = setTimeout(() => { if (!first)
-                reject(new Error(`Ollama timeout (> ${timeoutSec}s).`)); }, timeoutSec * 1000);
+                reject(new Error(`Ollama не відповіла за ${timeoutSec}с.`)); }, timeoutSec * 1000);
             this._ollama.chatStream(this._history, t => {
                 if (!first) {
                     first = true;
@@ -153,9 +147,9 @@ class AgentLoop {
         switch (name) {
             case 'read_file': return Tools.readFile(args);
             case 'write_file': return Tools.writeFile(args, p => confirm(`Write ${p}`));
-            case 'edit_file': return Tools.editFile(args, p => confirm(`Edit ${p}`));
             case 'list_files': return Tools.listFiles(args);
             case 'run_terminal': return Tools.runTerminal(args, c => confirm(`Run ${c}`));
+            case 'create_directory': return Tools.createDirectory(args);
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
             default: return { ok: false, output: `Tool ${name} not found.` };

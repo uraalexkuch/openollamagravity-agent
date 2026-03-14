@@ -34,13 +34,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.writeFile = writeFile;
-exports.listFiles = listFiles;
-exports.readFile = readFile;
-exports.runTerminal = runTerminal;
 exports.listSkills = listSkills;
+exports.writeFile = writeFile;
+exports.createDirectory = createDirectory;
+exports.readFile = readFile;
+exports.listFiles = listFiles;
+exports.runTerminal = runTerminal;
 exports.readSkill = readSkill;
-exports.editFile = editFile;
 const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
@@ -48,19 +48,53 @@ const cp = __importStar(require("child_process"));
 function root() { return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''; }
 function resolvePath(p) {
     if (!p)
-        throw new Error('Path is required but received undefined.');
+        throw new Error('Path argument is missing.');
     return path.isAbsolute(p) ? p : path.join(root(), p);
+}
+async function listSkills() {
+    try {
+        const p = vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
+        if (!p || !fs.existsSync(p))
+            return { ok: false, output: 'Skills repository not found.' };
+        // Рекурсивний пошук .md файлів у папці скілів
+        const files = fs.readdirSync(p, { recursive: true })
+            .filter(f => typeof f === 'string' && f.endsWith('.md'));
+        return { ok: true, output: files.length > 0 ? files.join('\n') : 'No .md skills found.' };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
 }
 async function writeFile(args, onConfirm) {
     try {
         if (!args.path)
-            return { ok: false, output: 'Error: "path" argument is missing.' };
+            return { ok: false, output: 'Error: Path is required.' };
         const abs = resolvePath(args.path);
         if (!await onConfirm(args.path))
-            return { ok: false, output: 'Rejected.' };
+            return { ok: false, output: 'User denied write.' };
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, args.content || '', 'utf8');
-        return { ok: true, output: `Successfully written to ${args.path}` };
+        return { ok: true, output: `Saved: ${args.path}` };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+async function createDirectory(args) {
+    try {
+        if (!args.path)
+            return { ok: false, output: 'Error: Path is required.' };
+        fs.mkdirSync(resolvePath(args.path), { recursive: true });
+        return { ok: true, output: `Created directory: ${args.path}` };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+async function readFile(args) {
+    try {
+        const abs = resolvePath(args.path);
+        return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     }
     catch (err) {
         return { ok: false, output: err.message };
@@ -71,15 +105,6 @@ async function listFiles(args) {
         const base = resolvePath(args.path || '.');
         const items = fs.readdirSync(base).slice(0, 100);
         return { ok: true, output: items.map(i => fs.statSync(path.join(base, i)).isDirectory() ? `📁 ${i}/` : `📄 ${i}`).join('\n') };
-    }
-    catch (err) {
-        return { ok: false, output: err.message };
-    }
-}
-async function readFile(args) {
-    try {
-        const abs = resolvePath(args.path);
-        return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     }
     catch (err) {
         return { ok: false, output: err.message };
@@ -96,25 +121,11 @@ async function runTerminal(args, onConfirm) {
         return { ok: false, output: err.message };
     }
 }
-async function listSkills() {
-    const p = vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
-    if (!p || !fs.existsSync(p))
-        return { ok: false, output: 'Skills not found.' };
-    return { ok: true, output: fs.readdirSync(p).join('\n') };
-}
 async function readSkill(args) {
-    const p = vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
-    return { ok: true, output: fs.readFileSync(path.join(p, args.name), 'utf8') };
-}
-async function editFile(args, onConfirm) {
     try {
-        const abs = resolvePath(args.path);
-        if (!await onConfirm(args.path))
-            return { ok: false, output: 'Rejected.' };
-        const content = fs.readFileSync(abs, 'utf8').split('\n');
-        content.splice(args.start_line - 1, args.end_line - args.start_line + 1, args.new_content);
-        fs.writeFileSync(abs, content.join('\n'), 'utf8');
-        return { ok: true, output: 'Edited.' };
+        const p = vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
+        const target = path.join(p, args.name);
+        return { ok: true, output: fs.readFileSync(target, 'utf8') };
     }
     catch (err) {
         return { ok: false, output: err.message };
