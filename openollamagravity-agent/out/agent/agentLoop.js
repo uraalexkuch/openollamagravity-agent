@@ -1,5 +1,4 @@
 "use strict";
-// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -35,14 +34,23 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentLoop = void 0;
+// Copyright (c) 2026 Юрій Кучеренко.
 const vscode = __importStar(require("vscode"));
 const client_1 = require("../ollama/client");
 const Tools = __importStar(require("./tools"));
-const getToolsSchema = (language) => `
-You are an autonomous coding agent.
-CRITICAL: To call a tool, use XML: <tool_call><name>TOOL_NAME</name><args>{"arg": "val"}</args></tool_call>.
+// ── ПОВЕРТАЄМО ЖОРСТКИЙ ШАБЛОН ІНСТРУМЕНТІВ ──
+const getToolsSchema = (language, actualSkillsPath) => `
+You are an autonomous coding agent. 
+CRITICAL: To call a tool, you MUST use exactly this XML format:
+<tool_call>
+<name>TOOL_NAME</name>
+<args>{"arg": "val"}</args>
+</tool_call>
 
-TOOLS:
+If no arguments are needed, use: <args>{}</args>
+DO NOT write Python, Node.js, or any other code to call tools. ONLY use the XML <tool_call> format. Do not ask for permission, just call the tool.
+
+AVAILABLE TOOLS:
 1. list_files({"path": "...", "depth": 3})
 2. read_file({"path": "..."})
 3. write_file({"path": "...", "content": "..."})
@@ -52,9 +60,10 @@ TOOLS:
 7. read_skill({"name": "..."})
 
 RULES:
-- Reply in ${language}.
-- CROSS-PROJECT: Use absolute paths like "D:\\\\web_project\\\\...".
-- SKILLS: ALWAYS call list_skills({}) as your VERY FIRST step for any new project.
+1. Reply in ${language}.
+2. For user projects, use absolute paths like "D:\\\\web_project\\\\...".
+3. YOUR SKILLS BASE is strictly located at: "${actualSkillsPath}".
+4. ALWAYS use list_skills({}) and read_skill({"name": "..."}) to access instructions. Do NOT invent alternative paths.
 `.trim();
 function parseToolCall(text) {
     const nameMatch = text.match(/<name>\s*([\w_]+)\s*<\/name>/i) || text.match(/"?name"?\s*:\s*"?([\w_]+)"?/i);
@@ -68,41 +77,55 @@ function parseToolCall(text) {
     if (!argsText || argsText === '{}' || !argsText.includes('{'))
         return { name, args: {} };
     try {
-        // Виправлення Windows шляхів (подвоєння бекслешів) перед парсингом JSON
-        const fixedJson = argsText.replace(/"(path|cwd|file_pattern)"\s*:\s*"([^"]+)"/g, (m, k, v) => `"${k}": "${v.replace(/\\/g, '\\\\').replace(/\\\\\\\\/g, '\\\\')}"`);
-        return { name, args: JSON.parse(fixedJson) };
+        const fixed = argsText.replace(/"(path|cwd)"\s*:\s*"([^"]+)"/g, (m, k, v) => `"${k}": "${v.replace(/\\/g, '\\\\').replace(/\\\\\\\\/g, '\\\\')}"`);
+        return { name, args: JSON.parse(fixed) };
     }
     catch {
         return { name, args: {} };
     }
 }
 class AgentLoop {
-    constructor(ollama) {
-        this._listeners = [];
+    constructor(_ollama) {
+        this._ollama = _ollama;
         this._history = [];
+        this._listeners = [];
         this.running = false;
-        this._ollama = ollama;
     }
     on(fn) { this._listeners.push(fn); }
     off(fn) { this._listeners = this._listeners.filter(l => l !== fn); }
     emit(ev) { this._listeners.forEach(l => l(ev)); }
     stop() { this._abortCtrl?.abort(); this.running = false; }
-    clearHistory() { this._history = []; client_1.oogLogger.appendLine('\n[Agent] Контекст очищено.'); }
+    clearHistory() { this._history = []; client_1.oogLogger.appendLine('[Agent] Історію очищено.'); }
     async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian') {
         this.running = true;
         this._abortCtrl = new AbortController();
         const signal = this._abortCtrl.signal;
-        const maxSteps = vscode.workspace.getConfiguration('openollamagravity').get('maxAgentSteps', 50);
-        const sysPrompt = getToolsSchema(language) + (workspaceContext ? `\n\nWORKSPACE:\n${workspaceContext}` : '');
-        if (!this._history.length)
+        const cfg = vscode.workspace.getConfiguration('openollamagravity');
+        const maxSteps = cfg.get('maxAgentSteps', 25);
+        // Отримуємо РЕАЛЬНИЙ шлях до скілів
+        const actualSkillsPath = cfg.get('skillsPath', '').replace(/\\/g, '\\\\');
+        let finalTask = task;
+        try {
+            const skills = await Tools.listSkills();
+            if (skills.ok) {
+                const matches = skills.output.split('\n').filter(s => s.endsWith('.md') && new RegExp(`\\b${s.replace('.md', '')}\\b`, 'i').test(task));
+                if (matches.length)
+                    finalTask += `\n\n[SYSTEM HINT]: Спершу обов'язково прочитай ці інструкції зі своєї бази знань:\n${matches.map(m => `- read_skill({"name": "${m}"})`).join('\n')}`;
+            }
+        }
+        catch { }
+        if (this._history.length === 0) {
+            // Використовуємо функцію для генерації повного промпту
+            const sysPrompt = getToolsSchema(language, actualSkillsPath);
             this._history.push({ role: 'system', content: sysPrompt });
-        this._history.push({ role: 'user', content: task });
-        client_1.oogLogger.appendLine(`\n🎯 ЗАВДАННЯ: ${task}`);
+            if (contextMessages.length > 0)
+                this._history.push(...contextMessages);
+        }
+        this._history.push({ role: 'user', content: finalTask });
         for (let step = 1; step <= maxSteps; step++) {
             if (signal.aborted)
                 break;
             this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
-            client_1.oogLogger.appendLine(`\n--- Крок ${step} / ${maxSteps} ---`);
             let output = '';
             try {
                 output = await this._streamWithTimeout(step, maxSteps, signal);
@@ -116,39 +139,31 @@ class AgentLoop {
                 this.emit({ type: 'answer', content: output });
                 break;
             }
-            client_1.oogLogger.appendLine(`[Agent] ВИКЛИК: ${tool.name}`);
             this.emit({ type: 'tool_call', content: `Calling: ${tool.name}`, toolName: tool.name, toolArgs: tool.args });
             const res = await this.executeTool(tool.name, tool.args);
-            client_1.oogLogger.appendLine(`[Agent] РЕЗУЛЬТАТ: ${res.ok ? 'OK' : 'FAIL'}`);
             this.emit({ type: 'tool_result', content: res.output, toolName: tool.name, ok: res.ok });
             this._history.push({ role: 'assistant', content: output });
-            this._history.push({ role: 'user', content: `<tool_result>\n<name>${tool.name}</name>\n<ok>${res.ok}</ok>\n<output>${res.output}</output>\n</tool_result>` });
+            this._history.push({ role: 'user', content: `<tool_result><name>${tool.name}</name><ok>${res.ok}</ok><output>${res.output}</output></tool_result>` });
         }
         this.running = false;
-        this.emit({ type: 'done', content: 'Done' });
+        this.emit({ type: 'done', content: '' });
     }
-    async _streamWithTimeout(step, totalSteps, signal) {
-        const timeoutSec = vscode.workspace.getConfiguration('openollamagravity').get('firstTokenTimeoutSec', 180);
-        return new Promise((resolve, reject) => {
-            let first = false;
-            const h = setTimeout(() => { if (!first)
-                reject(new Error(`Ollama не відповіла за ${timeoutSec}с.`)); }, timeoutSec * 1000);
-            this._ollama.chatStream(this._history, t => {
-                if (!first) {
-                    first = true;
-                    clearTimeout(h);
-                }
-                this.emit({ type: 'thinking', content: t, step, totalSteps });
-            }, signal, this.model).then(resolve).catch(reject);
+    async _streamWithTimeout(step, total, signal) {
+        const timeout = vscode.workspace.getConfiguration('openollamagravity').get('firstTokenTimeoutSec', 180) * 1000;
+        return new Promise((res, rej) => {
+            let started = false;
+            const h = setTimeout(() => { if (!started)
+                rej(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.')); }, timeout);
+            this._ollama.chatStream(this._history, t => { started = true; clearTimeout(h); this.emit({ type: 'thinking', content: t, step, totalSteps: total }); }, signal, this.model).then(res).catch(rej);
         });
     }
     async executeTool(name, args) {
-        const confirm = async (l) => (await vscode.window.showWarningMessage(`OOG: ${l}`, 'Allow', 'Deny')) === 'Allow';
+        const conf = async (m) => (await vscode.window.showWarningMessage(`OOG: ${m}`, 'Allow', 'Deny')) === 'Allow';
         switch (name) {
             case 'read_file': return Tools.readFile(args);
-            case 'write_file': return Tools.writeFile(args, p => confirm(`Write ${p}`));
+            case 'write_file': return Tools.writeFile(args, p => conf(`Записати у ${p}`));
             case 'list_files': return Tools.listFiles(args);
-            case 'run_terminal': return Tools.runTerminal(args, c => confirm(`Run ${c}`));
+            case 'run_terminal': return Tools.runTerminal(args, c => conf(`Запустити ${c}`));
             case 'create_directory': return Tools.createDirectory(args);
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);

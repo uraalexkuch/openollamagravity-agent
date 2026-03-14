@@ -1,154 +1,108 @@
-// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
-// Licensed under the MIT License. See LICENSE file in the project root for full license information.
-
+// Copyright (c) 2026 Юрій Кучеренко.
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 
-// ── Глобальний канал виводу для технічного моніторингу ──
 export const oogLogger = vscode.window.createOutputChannel('OOG Agent Log');
 
-export interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-export interface OllamaModel {
-  name: string;
-  size: number;
-  modified_at: string;
-}
-
-function cfg<T>(key: string, def: T): T {
-  return vscode.workspace.getConfiguration('openollamagravity').get(key, def);
-}
+export interface OllamaMessage { role: 'system' | 'user' | 'assistant'; content: string; }
 
 export class OllamaClient {
-  get baseUrl() { return cfg<string>('ollamaUrl', 'http://localhost:11434'); }
-  get model()   { return cfg<string>('model', 'codellama'); }
-  get temp()    { return cfg<number>('temperature', 0.15); }
-  get maxTok()  { return cfg<number>('maxTokens', 4096); }
-
-  private getDynamicContext(modelName: string): number {
-    const name = modelName.toLowerCase();
-    const hardwareLimit = cfg<number>('maxDynamicContext', 32768);
-    let ctxSize = cfg<number>('baseContextSize', 4096);
-
-    // Моделі з великим вікном контексту (128k+)
-    if (name.includes('llama3.2') || name.includes('qwen') || name.includes('deepseek')) {
-      ctxSize = Math.min(131072, hardwareLimit);
-    } else if (name.includes('llama3')) {
-      ctxSize = Math.min(8192, hardwareLimit);
-    }
-    return ctxSize;
+  /** Повертає поточну модель з налаштувань */
+  get model(): string {
+    return vscode.workspace.getConfiguration('openollamagravity').get('model', 'codellama');
   }
 
-  async listModels(): Promise<OllamaModel[]> {
-    const raw = await this.get('/api/tags');
-    return (JSON.parse(raw).models ?? []) as OllamaModel[];
+  private cfg<T>(key: string, def: T): T {
+    return vscode.workspace.getConfiguration('openollamagravity').get(key, def);
+  }
+
+  /** Оптимізує вікно контексту під конкретну модель */
+  private getDynamicContext(model: string): number {
+    const m = model.toLowerCase();
+    const limit = this.cfg<number>('maxDynamicContext', 32768);
+    if (m.includes('llama3.2') || m.includes('qwen') || m.includes('deepseek')) return Math.min(131072, limit);
+    if (m.includes('gemma') || m.includes('mistral')) return Math.min(32768, limit);
+    return Math.min(8192, limit);
+  }
+
+  async listModels(): Promise<any[]> {
+    try {
+      const res = await this.get('/api/tags');
+      return JSON.parse(res).models || [];
+    } catch { return []; }
   }
 
   async isAvailable(): Promise<boolean> {
     try { await this.get('/api/tags'); return true; } catch { return false; }
   }
 
-  async chatStream(
-      messages: OllamaMessage[],
-      onChunk: (tok: string) => void,
-      signal?: AbortSignal,
-      modelOverride?: string
-  ): Promise<string> {
+  async chatStream(messages: OllamaMessage[], onChunk: (t: string) => void, signal?: AbortSignal, modelOverride?: string): Promise<string> {
     const targetModel = modelOverride || this.model;
-    const dynamicCtx = this.getDynamicContext(targetModel);
-
-    oogLogger.appendLine(`\n[${new Date().toLocaleTimeString()}] 🚀 Старт генерації (${targetModel})`);
-    oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ⚙️ Вікно контексту (num_ctx): ${dynamicCtx}`);
+    const ctx = this.getDynamicContext(targetModel);
+    oogLogger.appendLine(`\n[${new Date().toLocaleTimeString()}] 🚀 Генерація: ${targetModel} (Context: ${ctx})`);
 
     const body = JSON.stringify({
       model: targetModel,
       messages,
       stream: true,
-      options: { temperature: this.temp, num_predict: this.maxTok, num_ctx: dynamicCtx },
+      options: { temperature: this.cfg('temperature', 0.15), num_ctx: ctx, num_predict: this.cfg('maxTokens', 4096) }
     });
-
-    const startTime = Date.now();
-    let firstTok = false;
 
     return new Promise((resolve, reject) => {
       let full = '';
-      const url = new URL('/api/chat', this.baseUrl);
+      const url = new URL('/api/chat', this.cfg('ollamaUrl', 'http://localhost:11434'));
       const lib = url.protocol === 'https:' ? https : http;
-
-      const req = lib.request({
-        hostname: url.hostname,
-        port: parseInt(url.port) || 11434,
-        path: '/api/chat',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      }, res => {
+      const req = lib.request({ hostname: url.hostname, port: url.port || 11434, path: '/api/chat', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
         let buf = '';
         res.on('data', (chunk: Buffer) => {
           if (signal?.aborted) { req.destroy(); return; }
-          if (!firstTok) {
-            firstTok = true;
-            oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ⏱️ Перша відповідь через ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
-          }
           buf += chunk.toString();
           const lines = buf.split('\n');
           buf = lines.pop() ?? '';
           for (const line of lines) {
             try {
               const j = JSON.parse(line);
-              const tok = j?.message?.content ?? '';
-              if (tok) { full += tok; onChunk(tok); }
-              if (j.done) {
-                oogLogger.appendLine(`[${new Date().toLocaleTimeString()}] ✅ Отримано повну відповідь за ${((Date.now() - startTime) / 1000).toFixed(1)}с.`);
-                resolve(full);
-              }
-            } catch { /* parse error */ }
+              if (j.message?.content) { full += j.message.content; onChunk(j.message.content); }
+              if (j.done) resolve(full);
+            } catch {}
           }
         });
         res.on('end', () => resolve(full));
       });
       req.on('error', reject);
-      signal?.addEventListener('abort', () => req.destroy());
+      signal?.addEventListener('abort', () => { req.destroy(); resolve(full); });
       req.write(body); req.end();
     });
   }
 
-  async generate(prompt: string, maxTokens = 512, modelOverride?: string): Promise<string> {
-    const targetModel = modelOverride || this.model;
+  /** Генерація для inlineCompletion та простих запитів */
+  async generate(prompt: string, maxTokens = 256, modelOverride?: string): Promise<string> {
     const body = JSON.stringify({
-      model: targetModel,
+      model: modelOverride || this.model,
       prompt, stream: false,
-      options: { temperature: this.temp, num_predict: maxTokens, num_ctx: this.getDynamicContext(targetModel) },
+      options: { num_ctx: 4096, num_predict: maxTokens }
     });
-    const raw = await this.post('/api/generate', body);
-    return JSON.parse(raw).response ?? '';
+    try {
+      const res = await this.post('/api/generate', body);
+      return JSON.parse(res).response || '';
+    } catch { return ''; }
   }
 
-  private get(path: string): Promise<string> {
+  private async get(p: string): Promise<string> {
     return new Promise((res, rej) => {
-      const url = new URL(path, this.baseUrl);
-      const lib = url.protocol === 'https:' ? https : http;
-      lib.get(url.toString(), r => {
-        let d = '';
-        r.on('data', c => d += c);
-        r.on('end', () => res(d));
-      }).on('error', rej);
+      const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
+      http.get(url.toString(), r => { let d = ''; r.on('data', c => d += c); r.on('end', () => res(d)); }).on('error', rej);
     });
   }
 
-  private post(path: string, body: string): Promise<string> {
+  private async post(p: string, b: string): Promise<string> {
     return new Promise((res, rej) => {
-      const url = new URL(path, this.baseUrl);
-      const lib = url.protocol === 'https:' ? https : http;
-      const req = lib.request({ hostname: url.hostname, port: parseInt(url.port) || 11434, path, method: 'POST', headers: { 'Content-Type': 'application/json' } }, r => {
-        let d = '';
-        r.on('data', c => d += c);
-        r.on('end', () => res(d));
+      const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
+      const req = http.request({ hostname: url.hostname, port: url.port || 11434, path: p, method: 'POST', headers: { 'Content-Type': 'application/json' } }, r => {
+        let d = ''; r.on('data', c => d += c); r.on('end', () => res(d));
       });
-      req.write(body); req.end();
+      req.on('error', rej); req.write(b); req.end();
     });
   }
 }
