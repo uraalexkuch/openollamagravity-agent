@@ -10,7 +10,7 @@
     "url": "https://github.com/yuriikucherenko/openollamagravity-agent.git"
   },
   "license": "MIT",
-  "icon": "resources/icon.jpg",
+
   "engines": {
     "vscode": "^1.80.0"
   },

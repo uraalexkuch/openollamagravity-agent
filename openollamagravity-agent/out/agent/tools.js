@@ -1,4 +1,6 @@
 "use strict";
+// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
+// Licensed under the MIT License. See LICENSE file in the project root for full license information.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -37,6 +39,11 @@ exports.readFile = readFile;
 exports.writeFile = writeFile;
 exports.editFile = editFile;
 exports.listFiles = listFiles;
+exports.searchFiles = searchFiles;
+exports.getFileOutline = getFileOutline;
+exports.createDirectory = createDirectory;
+exports.deleteFile = deleteFile;
+exports.webSearch = webSearch;
 exports.runTerminal = runTerminal;
 exports.listSkills = listSkills;
 exports.readSkill = readSkill;
@@ -46,6 +53,8 @@ const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const cp = __importStar(require("child_process"));
+const http = __importStar(require("http"));
+const https = __importStar(require("https"));
 function root() {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 }
@@ -179,6 +188,172 @@ async function listFiles(args) {
     catch (err) {
         return { ok: false, output: err.message };
     }
+}
+// ─────────────────────────────────────────────────────────
+//  TOOL: search_files
+// ─────────────────────────────────────────────────────────
+async function searchFiles(args) {
+    try {
+        const base = args.path ? resolvePath(args.path) : root();
+        const results = [];
+        const re = new RegExp(args.pattern, 'i');
+        const fileRe = args.file_pattern ? new RegExp(args.file_pattern) : null;
+        function walk(dir) {
+            const IGNORE = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next']);
+            let items;
+            try {
+                items = fs.readdirSync(dir);
+            }
+            catch {
+                return;
+            }
+            for (const item of items) {
+                if (IGNORE.has(item) || item.startsWith('.'))
+                    continue;
+                const full = path.join(dir, item);
+                const stat = fs.statSync(full);
+                if (stat.isDirectory()) {
+                    walk(full);
+                    continue;
+                }
+                if (fileRe && !fileRe.test(item))
+                    continue;
+                if (stat.size > 500000)
+                    continue;
+                try {
+                    const lines = fs.readFileSync(full, 'utf8').split('\n');
+                    lines.forEach((line, i) => {
+                        if (re.test(line)) {
+                            const rel = path.relative(root(), full);
+                            results.push(`${rel}:${i + 1}  ${line.trim().slice(0, 120)}`);
+                        }
+                    });
+                }
+                catch { /* binary file */ }
+            }
+        }
+        walk(base);
+        if (results.length === 0)
+            return { ok: true, output: 'No matches found.' };
+        const limited = results.slice(0, 50);
+        const suffix = results.length > 50 ? `\n…and ${results.length - 50} more` : '';
+        return { ok: true, output: limited.join('\n') + suffix };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+// ─────────────────────────────────────────────────────────
+//  TOOL: get_file_outline
+// ─────────────────────────────────────────────────────────
+async function getFileOutline(args) {
+    try {
+        const abs = resolvePath(args.path);
+        const uri = vscode.Uri.file(abs);
+        const syms = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
+        if (!syms || syms.length === 0) {
+            const content = fs.readFileSync(abs, 'utf8').split('\n');
+            const outline = [];
+            content.forEach((line, i) => {
+                if (/^(export\s+)?(async\s+)?(function|class|const|let|var|interface|type|enum)\s+\w/.test(line.trim())) {
+                    outline.push(`L${i + 1}: ${line.trim().slice(0, 80)}`);
+                }
+            });
+            return { ok: true, output: outline.length ? outline.join('\n') : 'No symbols found.' };
+        }
+        function renderSymbols(symbols, indent = '') {
+            return symbols.flatMap(s => {
+                const kind = vscode.SymbolKind[s.kind];
+                const line = `${indent}${kind} ${s.name} (L${s.range.start.line + 1})`;
+                return [line, ...renderSymbols(s.children, indent + '  ')];
+            });
+        }
+        return { ok: true, output: renderSymbols(syms).join('\n') };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+// ─────────────────────────────────────────────────────────
+//  TOOL: create_directory
+// ─────────────────────────────────────────────────────────
+async function createDirectory(args) {
+    try {
+        fs.mkdirSync(resolvePath(args.path), { recursive: true });
+        return { ok: true, output: `Created directory: ${args.path}` };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+// ─────────────────────────────────────────────────────────
+//  TOOL: delete_file
+// ─────────────────────────────────────────────────────────
+async function deleteFile(args, onConfirm) {
+    const ok = await onConfirm(args.path);
+    if (!ok)
+        return { ok: false, output: 'User rejected deletion.' };
+    try {
+        fs.unlinkSync(resolvePath(args.path));
+        return { ok: true, output: `Deleted: ${args.path}` };
+    }
+    catch (err) {
+        return { ok: false, output: err.message };
+    }
+}
+// ─────────────────────────────────────────────────────────
+//  TOOL: web_search (via Perplexica)
+// ─────────────────────────────────────────────────────────
+async function webSearch(args) {
+    const perplexicaUrl = vscode.workspace.getConfiguration('openollamagravity').get('perplexicaUrl', 'http://10.1.0.138:3030');
+    return new Promise((promiseResolve) => {
+        try {
+            const url = new URL('/api/search', perplexicaUrl);
+            const lib = url.protocol === 'https:' ? https : http;
+            const bodyData = JSON.stringify({ query: args.query, focusMode: 'webSearch' });
+            const req = lib.request(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(bodyData)
+                }
+            }, (res) => {
+                let buf = '';
+                res.on('data', d => buf += d.toString());
+                res.on('end', () => {
+                    if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+                        promiseResolve({ ok: false, output: `Search failed with HTTP status: ${res.statusCode}` });
+                        return;
+                    }
+                    try {
+                        const data = JSON.parse(buf);
+                        if (!data.message && (!data.sources || data.sources.length === 0)) {
+                            promiseResolve({ ok: true, output: "No results found." });
+                            return;
+                        }
+                        let output = `Search Results for "${args.query}":\n\n`;
+                        output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
+                        if (data.sources && data.sources.length > 0) {
+                            output += "Sources:\n";
+                            data.sources.slice(0, 3).forEach((s, i) => {
+                                output += `[${i + 1}] ${s.title}\nURL: ${s.url}\n\n`;
+                            });
+                        }
+                        promiseResolve({ ok: true, output: output.slice(0, 3000) });
+                    }
+                    catch (e) {
+                        promiseResolve({ ok: false, output: `Failed to parse response: ${e.message}` });
+                    }
+                });
+            });
+            req.on('error', (err) => promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}` }));
+            req.write(bodyData);
+            req.end();
+        }
+        catch (err) {
+            promiseResolve({ ok: false, output: `Error: ${err.message}` });
+        }
+    });
 }
 // ─────────────────────────────────────────────────────────
 //  TOOL: run_terminal
