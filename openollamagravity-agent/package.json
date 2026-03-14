@@ -1,0 +1,216 @@
+{
+  "name": "openollamagravity-agent",
+  "displayName": "OpenOllamaGravity Agent",
+  "description": "Автономний AI-агент для програмування на базі Ollama",
+  "version": "1.0.2",
+  "publisher": "yuriikucherenko",
+  "author": "Юрій Кучеренко",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yuriikucherenko/openollamagravity-agent.git"
+  },
+  "license": "MIT",
+  "icon": "resources/icon.jpg",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "openollamagravity.openAgent",
+        "title": "Open Agent",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.newTask",
+        "title": "New Task (Parallel Agent)",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.stopAgent",
+        "title": "Stop All Agents",
+        "category": "OpenOllamaGravity",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "openollamagravity.selectModel",
+        "title": "Select Default Model",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.explainFile",
+        "title": "Explain File",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.fixSelection",
+        "title": "Fix Bugs in Selection",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.refactor",
+        "title": "Refactor Selection",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.writeTests",
+        "title": "Write Tests for Selection",
+        "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.implement",
+        "title": "Implement Stub/Comments",
+        "category": "OpenOllamaGravity"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "openollamagravity.explainFile",
+          "group": "openollamagravity@1"
+        },
+        {
+          "command": "openollamagravity.fixSelection",
+          "group": "openollamagravity@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "openollamagravity.refactor",
+          "group": "openollamagravity@3",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "openollamagravity.writeTests",
+          "group": "openollamagravity@4",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "openollamagravity.implement",
+          "group": "openollamagravity@5",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OpenOllamaGravity",
+      "properties": {
+        "openollamagravity.ollamaUrl": {
+          "type": "string",
+          "default": "http://10.1.0.102:11434",
+          "description": "URL адреса локального або віддаленого сервера Ollama."
+        },
+        "openollamagravity.model": {
+          "type": "string",
+          "default": "gemma3n:latest",
+          "description": "Модель за замовчуванням (gemma3n:latest)."
+        },
+        "openollamagravity.temperature": {
+          "type": "number",
+          "default": 0.15,
+          "description": "Температура генерації (0.0 - 1.0). Нижче значення робить код більш детермінованим."
+        },
+        "openollamagravity.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "Максимальна кількість токенів для генерації відповіді."
+        },
+        "openollamagravity.maxDynamicContext": {
+          "type": "number",
+          "default": 32768,
+          "description": "Жорсткий ліміт контексту (Hard Limit) у токенах для великих моделей (Qwen, DeepSeek). Встановіть 131072, якщо маєте 24GB+ VRAM, або зменште до 8192, якщо Ollama падає з помилкою Out of Memory."
+        },
+        "openollamagravity.baseContextSize": {
+          "type": "number",
+          "default": 4096,
+          "description": "Базовий розмір вікна контексту для старих або легких моделей."
+        },
+        "openollamagravity.maxAgentSteps": {
+          "type": "number",
+          "default": 50,
+          "description": "Максимальна кількість циклів (кроків) для виконання одного завдання агентом."
+        },
+        "openollamagravity.autoApplyEdits": {
+          "type": "boolean",
+          "default": false,
+          "description": "УВІМКНУТИ З ОБЕРЕЖНІСТЮ: Дозволити агенту записувати та редагувати файли без запиту на підтвердження."
+        },
+        "openollamagravity.terminalEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Дозволити агенту виконувати команди в терміналі (збір інформації, тести)."
+        },
+        "openollamagravity.allowedShellCmds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "npm",
+            "npx",
+            "node",
+            "python",
+            "git",
+            "tsc",
+            "ng",
+            "nest"
+          ],
+          "description": "Список дозволених базових команд термінала для агента."
+        },
+        "openollamagravity.perplexicaUrl": {
+          "type": "string",
+          "default": "http://10.1.0.138:3030",
+          "description": "URL сервера Perplexica для використання інструменту web_search."
+        },
+        "openollamagravity.inlineCompletionEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Увімкнути фонове автодоповнення коду в редакторі (Inline Completion)."
+        },
+        "openollamagravity.inlineCompletionDelay": {
+          "type": "number",
+          "default": 700,
+          "description": "Затримка у мілісекундах перед запитом на автодоповнення коду."
+        },
+        "openollamagravity.workspaceContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Автоматично додавати інформацію про поточний проєкт (package.json, відкриті файли) у контекст агента."
+        },
+        "openollamagravity.skillsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Шлях до репозиторію skills (заповнюється автоматично при активації розширення)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^5.59.8",
+    "@typescript-eslint/parser": "^5.59.8",
+    "eslint": "^8.41.0",
+    "glob": "^8.1.0",
+    "mocha": "^10.2.0",
+    "typescript": "^5.1.3",
+    "@vscode/test-electron": "^2.3.2"
+  }
+}
