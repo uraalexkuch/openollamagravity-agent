@@ -1,4 +1,6 @@
 "use strict";
+// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
+// Licensed under the MIT License. See LICENSE file in the project root for full license information.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -131,7 +133,6 @@ class AgentPanel {
         await this._loop.run(task, [], workspaceCtx, language, '', selectedSkills);
         vscode.commands.executeCommand('setContext', 'openollamagravity.running', false);
     }
-    // ── Збереження Markdown у файл ──
     async _saveMarkdown(content) {
         const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri
             ? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'report.md')
@@ -226,87 +227,70 @@ class AgentPanel {
   #modelSelect option, #lang-select option { background: #1a1d21; color: #e2e8f0; }
   .select-wrapper { position: relative; display: flex; align-items: center; }
   .select-arrow { position: absolute; right: 6px; pointer-events: none; font-size: 8px; color: #64748b; }
-      .btns button {
-        background: #313244;
-        color: #cdd6f4;
-        border: 1px solid #45475a;
-        padding: 6px 14px;
-        border-radius: 6px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-weight: 500;
-        transition: all 0.2s;
-      }
-      .btns button:hover:not(:disabled) {
-        background: #45475a;
-        border-color: #585b70;
-      }
+  
+  #btn-clear {
+    background: none;
+    border: 1px solid #2a2d33;
+    border-radius: 6px;
+    color: #64748b;
+    cursor: pointer;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: inherit;
+    transition: all .15s;
+  }
+  #btn-clear:hover { border-color: #353940; color: #94a3b8; }
 
-      /* Skills UI */
-      .skills-panel {
-        background: #1e1e2e;
-        border: 1px solid #313244;
-        border-radius: 8px;
-        margin-bottom: 15px;
-        display: none;
-      }
-      .skills-header {
-        padding: 8px 12px;
-        border-bottom: 1px solid #313244;
-        cursor: pointer;
-        font-size: 11px;
-        font-weight: 600;
-        color: #9399b2;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      .skills-list {
-        max-height: 200px;
-        overflow-y: auto;
-        padding: 8px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .skill-item {
-        background: #313244;
-        border: 1px solid #45475a;
-        border-radius: 4px;
-        padding: 2px 8px;
-        font-size: 10px;
-        color: #cdd6f4;
-        cursor: pointer;
-        user-select: none;
-      }
-      .skill-item.selected {
-        background: #f59e0b;
-        color: #11111b;
-        border-color: #f59e0b;
-      }
-      .skill-item:hover {
-        border-color: #f5bde6;
-      }
+  /* ── In-flow Skills Panel ── */
+  #skills-panel {
+    display: none;
+    flex-direction: column;
+    background: #1a1d21;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    max-height: 250px;
+  }
+  .skills-panel-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid #313244;
+    font-size: 11px; font-weight: 600; color: #9399b2;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .skills-panel-list {
+    overflow-y: auto; padding: 10px;
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .skill-item {
+    background: #313244;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #cdd6f4;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color .15s;
+  }
+  .skill-item.selected {
+    background: #f59e0b;
+    color: #11111b;
+    border-color: #f59e0b;
+    font-weight: bold;
+  }
+  .skill-item:hover {
+    border-color: #f5bde6;
+  }
 
   /* ── Progress ── */
   #progress-wrap { height: 3px; background: #131618; flex-shrink: 0; display: none; }
   #progress-bar {
-    height: 100%;
-    width: 0%;
-    background: #00e5ff;
-    transition: width .4s ease;
+    height: 100%; width: 0%; background: #00e5ff; transition: width .4s ease;
   }
 
   /* ── Chat ── */
   #chat {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;
   }
   #chat::-webkit-scrollbar { width: 5px; }
   #chat::-webkit-scrollbar-track { background: transparent; }
@@ -314,31 +298,16 @@ class AgentPanel {
 
   /* ── Empty state ── */
   #empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: #64748b;
-    text-align: center;
-    padding: 40px;
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; color: #64748b; text-align: center; padding: 40px;
   }
   #empty .big   { font-size: 36px; line-height: 1; margin-bottom: 8px; }
   #empty .title { font-size: 15px; color: #94a3b8; font-weight: 600; }
   #empty .sub   { font-size: 12px; line-height: 1.7; max-width: 280px; }
   #empty .hints { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; width: 100%; max-width: 340px; }
   #empty .hint {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
-    background: #1a1d21;
-    border: 1px solid #2a2d33;
-    border-radius: 6px;
-    padding: 7px 12px;
-    cursor: pointer;
-    color: #94a3b8;
-    transition: all .15s;
-    text-align: left;
+    font-family: 'Courier New', Courier, monospace; font-size: 11px; background: #1a1d21; border: 1px solid #2a2d33;
+    border-radius: 6px; padding: 7px 12px; cursor: pointer; color: #94a3b8; transition: all .15s; text-align: left;
   }
   #empty .hint:hover { border-color: #00e5ff; color: #00e5ff; background: #0d1a1e; }
 
@@ -347,25 +316,14 @@ class AgentPanel {
   @keyframes fadeIn { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
 
   .msg-label {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    user-select: none;
+    font-family: 'Courier New', Courier, monospace; font-size: 10px; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; user-select: none;
   }
   .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 
   .msg-body {
-    border-radius: 8px;
-    padding: 11px 14px;
-    line-height: 1.7;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-    border-left: 3px solid transparent;
+    border-radius: 8px; padding: 11px 14px; line-height: 1.7; word-break: break-word;
+    overflow-wrap: anywhere; border-left: 3px solid transparent;
   }
 
   .msg-user .msg-label { color: #6b8cff; }
@@ -374,46 +332,20 @@ class AgentPanel {
   .msg-answer .msg-label { color: #22c55e; }
   .msg-answer .msg-body  { background: #141a14; border-left-color: #22c55e; white-space: pre-wrap; }
 
-  /* ── Actions bar for saved messages ── */
-  .msg-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 4px;
-    padding-right: 4px;
-  }
+  .msg-actions { display: flex; justify-content: flex-end; margin-top: 4px; padding-right: 4px; }
   .btn-action {
-    background: #1a1d21;
-    border: 1px solid #2a2d33;
-    border-radius: 4px;
-    color: #94a3b8;
-    cursor: pointer;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 10px;
-    font-weight: bold;
-    padding: 4px 10px;
-    transition: all .15s;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    background: #1a1d21; border: 1px solid #2a2d33; border-radius: 4px; color: #94a3b8; cursor: pointer;
+    font-family: 'Courier New', Courier, monospace; font-size: 10px; font-weight: bold; padding: 4px 10px;
+    transition: all .15s; display: flex; align-items: center; gap: 4px;
   }
-  .btn-action:hover {
-    background: #00e5ff;
-    color: #000;
-    border-color: #00e5ff;
-  }
+  .btn-action:hover { background: #00e5ff; color: #000; border-color: #00e5ff; }
 
   .msg-thinking .msg-label { color: #7c3aed; cursor: pointer; }
   .msg-thinking .msg-label::after { content: '▾'; font-size: 10px; opacity: .7; }
   .msg-thinking.collapsed .msg-label::after { content: '▸'; }
   .msg-thinking .msg-body {
-    background: #12121a;
-    border-left-color: #7c3aed;
-    color: #64748b;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
-    white-space: pre-wrap;
-    max-height: 240px;
-    overflow-y: auto;
+    background: #12121a; border-left-color: #7c3aed; color: #64748b; font-family: 'Courier New', Courier, monospace;
+    font-size: 11px; white-space: pre-wrap; max-height: 240px; overflow-y: auto;
   }
   .msg-thinking.collapsed .msg-body { display: none; }
 
@@ -424,14 +356,8 @@ class AgentPanel {
 
   .msg-result .msg-label { color: #475569; }
   .msg-result .msg-body  {
-    background: #131618;
-    border-left-color: #2a2d33;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
-    color: #94a3b8;
-    white-space: pre-wrap;
-    max-height: 240px;
-    overflow-y: auto;
+    background: #131618; border-left-color: #2a2d33; font-family: 'Courier New', Courier, monospace;
+    font-size: 11px; color: #94a3b8; white-space: pre-wrap; max-height: 240px; overflow-y: auto;
   }
   .msg-result.err .msg-label { color: #ef4444; }
   .msg-result.err .msg-body  { border-left-color: #ef4444; color: #fca5a5; }
@@ -439,24 +365,12 @@ class AgentPanel {
   .msg-status .msg-body { background: transparent; border: none; padding: 0 2px; font-size: 11px; color: #64748b; }
 
   .msg-body pre {
-    background: #0a0c10;
-    border: 1px solid #2a2d33;
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin: 8px 0;
-    overflow-x: auto;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
-    line-height: 1.6;
-    white-space: pre;
+    background: #0a0c10; border: 1px solid #2a2d33; border-radius: 6px; padding: 10px 12px;
+    margin: 8px 0; overflow-x: auto; font-family: 'Courier New', Courier, monospace; font-size: 11px; line-height: 1.6; white-space: pre;
   }
   .msg-body code {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
-    background: rgba(255,255,255,.06);
-    border-radius: 3px;
-    padding: 1px 5px;
-    color: #00e5ff;
+    font-family: 'Courier New', Courier, monospace; font-size: 11px; background: rgba(255,255,255,.06);
+    border-radius: 3px; padding: 1px 5px; color: #00e5ff;
   }
   .msg-body pre code { background: none; padding: 0; color: #94a3b8; }
   .msg-body::-webkit-scrollbar { width: 4px; }
@@ -464,28 +378,17 @@ class AgentPanel {
 
   /* ── Live thinking indicator ── */
   #thinking-live {
-    display: none;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 16px;
-    color: #7c3aed;
-    font-size: 11px;
-    font-family: 'Courier New', Courier, monospace;
-    flex-shrink: 0;
+    display: none; align-items: center; gap: 8px; padding: 6px 16px; color: #7c3aed;
+    font-size: 11px; font-family: 'Courier New', Courier, monospace; flex-shrink: 0;
   }
   .pulse { display: flex; gap: 3px; }
   .pulse span {
-    width: 5px; height: 5px;
-    background: #7c3aed;
-    border-radius: 50%;
+    width: 5px; height: 5px; background: #7c3aed; border-radius: 50%;
     animation: pulse 1s ease-in-out infinite;
   }
   .pulse span:nth-child(2) { animation-delay: .2s; }
   .pulse span:nth-child(3) { animation-delay: .4s; }
-  @keyframes pulse {
-    0%,100% { opacity:.3; transform:scale(.8); }
-    50%      { opacity:1;  transform:scale(1);  }
-  }
+  @keyframes pulse { 0%,100% { opacity:.3; transform:scale(.8); } 50% { opacity:1; transform:scale(1); } }
 
   /* ── Input area ── */
   #input-wrap {
@@ -494,45 +397,41 @@ class AgentPanel {
     padding: 12px;
     flex-shrink: 0;
   }
+  
   #input-row { display: flex; gap: 8px; align-items: flex-end; }
 
   #input {
-    flex: 1;
-    background: #1a1d21;
-    border: 1px solid #2a2d33;
-    border-radius: 8px;
-    color: #e2e8f0;
-    font-family: inherit;
-    font-size: 13px;
-    line-height: 1.5;
-    padding: 9px 12px;
-    resize: none;
-    min-height: 40px;
-    max-height: 180px;
-    outline: none;
-    transition: border-color .15s;
-    overflow-y: auto;
+    flex: 1; background: #1a1d21; border: 1px solid #2a2d33; border-radius: 8px; color: #e2e8f0;
+    font-family: inherit; font-size: 13px; line-height: 1.5; padding: 9px 12px; resize: none;
+    min-height: 40px; max-height: 180px; outline: none; transition: border-color .15s; overflow-y: auto;
   }
   #input:focus { border-color: #00e5ff; }
   #input::placeholder { color: #475569; }
 
-  #btn-send, #btn-stop {
+  /* Buttons next to input */
+  #btn-skills, #btn-send, #btn-stop {
     width: 40px; height: 40px;
-    border-radius: 8px;
-    border: none;
-    cursor: pointer;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all .15s;
-    flex-shrink: 0;
-    line-height: 1;
+    border-radius: 8px; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s; flex-shrink: 0; line-height: 1;
   }
-  #btn-send { background: #00e5ff; color: #000; font-weight: bold; }
+  
+  #btn-skills {
+    background: #1a1d21; color: #94a3b8; border: 1px solid #2a2d33; font-size: 16px; position: relative;
+  }
+  #btn-skills:hover:not(:disabled) { background: #2a2d33; color: #00e5ff; border-color: #00e5ff; }
+  #btn-skills:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .skills-badge {
+    position: absolute; top: -6px; right: -6px; background: #f59e0b; color: #000;
+    font-size: 10px; font-weight: bold; padding: 2px 5px; border-radius: 12px; display: none;
+  }
+
+  #btn-send { background: #00e5ff; color: #000; font-weight: bold; font-size: 18px; }
   #btn-send:hover:not(:disabled) { background: #33eaff; transform: scale(1.05); }
   #btn-send:disabled { background: #2a2d33; color: #475569; cursor: not-allowed; transform: none; }
-  #btn-stop { background: #ef4444; color: #fff; display: none; }
+  
+  #btn-stop { background: #ef4444; color: #fff; font-size: 18px; display: none; }
   #btn-stop:hover { background: #f87171; }
 
   #input-hint { font-size: 10px; color: #475569; margin-top: 6px; padding: 0 2px; }
@@ -571,15 +470,8 @@ class AgentPanel {
       <div class="big">&#x26A1;</div>
       <div class="title" id="empty-title">OpenOllamaGravity Agent</div>
       <div class="sub" id="empty-sub">Автономний агент на базі Ollama.<br>Планує, читає, пише, запускає — офлайн.</div>
-      <div class="skills-panel" id="skillsPanel">
-        <div class="skills-header" onclick="toggleSkills()">
-          <span>📚 SELECT SKILLS (<span id="skillsCount">0</span> selected)</span>
-          <span id="skillsArrow">▼</span>
-        </div>
-        <div class="skills-list" id="skillsList"></div>
-      </div>
 
-      <div class="btns">
+      <div class="hints">
         <div class="hint" id="hint1" data-hint="Поясни структуру цього проєкту">📁 Поясни структуру цього проєкту</div>
         <div class="hint" id="hint2" data-hint="Знайди та виправ баги у відкритому файлі">🐛 Знайди та виправ баги у відкритому файлі</div>
         <div class="hint" id="hint3" data-hint="Напиши unit-тести для виділеного коду">✅ Напиши unit-тести для виділеного коду</div>
@@ -594,8 +486,22 @@ class AgentPanel {
   </div>
 
   <div id="input-wrap">
+    
+    <div id="skills-panel">
+      <div class="skills-panel-header">
+        <span>📚 SELECT SKILLS (<span id="skillsCount">0</span>)</span>
+        <span style="cursor:pointer; font-size: 14px; line-height: 1;" onclick="toggleSkills()">&#x2715;</span>
+      </div>
+      <div class="skills-panel-list" id="skillsList"></div>
+    </div>
+
     <div id="input-row">
       <textarea id="input" rows="1" placeholder="Постав завдання агенту…"></textarea>
+      
+      <button id="btn-skills" title="Вибрати скіли" onclick="toggleSkills()">
+        📚<span class="skills-badge" id="skillsBadge">0</span>
+      </button>
+      
       <button id="btn-send" title="Надіслати (Enter)">&#x2191;</button>
       <button id="btn-stop" title="Зупинити агента">&#x25A0;</button>
     </div>
@@ -614,17 +520,22 @@ class AgentPanel {
   var btnSend   = document.getElementById('btn-send');
   var btnStop   = document.getElementById('btn-stop');
   var btnClear  = document.getElementById('btn-clear');
+  var btnSkills = document.getElementById('btn-skills');
   var progWrap  = document.getElementById('progress-wrap');
   var progBar   = document.getElementById('progress-bar');
   var thinkLive = document.getElementById('thinking-live');
   var thinkStep = document.getElementById('thinking-step');
-    var modelSelect = document.getElementById('modelSelect');
-    var skillsPanel = document.getElementById('skillsPanel');
-    var skillsList  = document.getElementById('skillsList');
-    var skillsCount = document.getElementById('skillsCount');
-    var allSkills   = [];
-    var selectedSkills = new Set();
+  
+  var modelSelect = document.getElementById('modelSelect');
   var langSelect  = document.getElementById('lang-select');
+  
+  var skillsPanel = document.getElementById('skills-panel');
+  var skillsList  = document.getElementById('skillsList');
+  var skillsCount = document.getElementById('skillsCount');
+  var skillsBadge = document.getElementById('skillsBadge');
+
+  var allSkills   = [];
+  var selectedSkills = new Set();
 
   var isRunning      = false;
   var currentThinkEl = null;
@@ -759,31 +670,41 @@ class AgentPanel {
     vscode.postMessage({ type: 'clear' });
   });
 
+  // Вбудована логіка відображення панелі скілів
+  window.toggleSkills = function() {
+    if (skillsPanel.style.display === 'flex') {
+      skillsPanel.style.display = 'none';
+      btnSkills.style.borderColor = '#2a2d33';
+      btnSkills.style.color = '#94a3b8';
+    } else {
+      skillsPanel.style.display = 'flex';
+      btnSkills.style.borderColor = '#00e5ff';
+      btnSkills.style.color = '#00e5ff';
+      // Скрол до кінця, щоб панель було видно, якщо чат заповнений
+      setTimeout(scrollBottom, 50);
+    }
+  };
+
   function send() {
     var text = inputEl.value.trim();
     if (!text || isRunning) return;
     inputEl.value = '';
     inputEl.style.height = 'auto';
-      vscode.postMessage({
-        type: 'run_task',
-        text: text,
-        lang: langSelect.value,
-        selectedSkills: Array.from(selectedSkills)
-      });
-    }
+    
+    // Ховаємо панель під час відправки
+    skillsPanel.style.display = 'none';
+    btnSkills.style.borderColor = '#2a2d33';
+    btnSkills.style.color = '#94a3b8';
 
-    window.toggleSkills = function() {
-      var list = document.getElementById('skillsList');
-      var arrow = document.getElementById('skillsArrow');
-      if (list.style.display === 'none') {
-        list.style.display = 'flex';
-        arrow.textContent = '▲';
-      } else {
-        list.style.display = 'none';
-        arrow.textContent = '▼';
-      }
-    };
-function hideEmpty() {
+    vscode.postMessage({
+      type: 'run_task',
+      text: text,
+      lang: langSelect.value,
+      selectedSkills: Array.from(selectedSkills)
+    });
+  }
+
+  function hideEmpty() {
     emptyEl.style.display = 'none';
   }
 
@@ -810,7 +731,6 @@ function hideEmpty() {
     var nl = String.fromCharCode(10);
     var triple = bt + bt + bt;
 
-    // Fenced code blocks
     var fenceParts = text.split(triple);
     if (fenceParts.length > 1) {
       var rebuilt = '';
@@ -825,7 +745,6 @@ function hideEmpty() {
       text = rebuilt;
     }
 
-    // Inline code
     var inlineParts = text.split(bt);
     if (inlineParts.length > 1) {
       var rebuilt2 = '';
@@ -836,7 +755,6 @@ function hideEmpty() {
       text = rebuilt2;
     }
 
-    // Bold
     var boldParts = text.split('**');
     if (boldParts.length > 1) {
       var rebuilt3 = '';
@@ -847,7 +765,6 @@ function hideEmpty() {
       text = rebuilt3;
     }
 
-    // Process line-by-line: headers and list items
     var resultLines = [];
     var rawLines = text.split(nl);
     for (var li = 0; li < rawLines.length; li++) {
@@ -891,7 +808,6 @@ function hideEmpty() {
     wrap.appendChild(label);
     wrap.appendChild(body);
 
-    // Додаємо кнопку збереження, якщо це відповідь агента
     if (cssClass === 'msg-answer' && rawText) {
       var actions = document.createElement('div');
       actions.className = 'msg-actions';
@@ -916,6 +832,7 @@ function hideEmpty() {
     btnSend.disabled = true;
     btnSend.style.display = 'none';
     btnStop.style.display = 'flex';
+    btnSkills.disabled = true;
     progWrap.style.display = 'block';
     progBar.style.width = '5%';
   }
@@ -926,6 +843,7 @@ function hideEmpty() {
     btnSend.disabled = false;
     btnSend.style.display = 'flex';
     btnStop.style.display = 'none';
+    btnSkills.disabled = false;
     thinkLive.style.display = 'none';
   }
 
@@ -945,11 +863,8 @@ function hideEmpty() {
         modelSelect.appendChild(opt);
       });
 
-      // Рендеримо скіли
       if (data.skills && data.skills.length > 0) {
         allSkills = data.skills;
-        skillsPanel.style.display = 'block';
-        skillsList.style.display = 'none'; // за замовчуванням приховано
         renderSkills();
       }
       return;
@@ -965,8 +880,13 @@ function hideEmpty() {
         sk.onclick = function() {
           if (selectedSkills.has(s.folderName)) selectedSkills.delete(s.folderName);
           else selectedSkills.add(s.folderName);
+          
           renderSkills();
-          skillsCount.textContent = selectedSkills.size;
+          
+          var count = selectedSkills.size;
+          skillsCount.textContent = count;
+          skillsBadge.textContent = count;
+          skillsBadge.style.display = count > 0 ? 'block' : 'none';
         };
         skillsList.appendChild(sk);
       });
@@ -994,7 +914,6 @@ function hideEmpty() {
     if (!ev) return;
 
     switch (ev.type) {
-
       case 'step':
         if (ev.totalSteps) {
           progBar.style.width = Math.round((ev.step / ev.totalSteps) * 100) + '%';
@@ -1011,7 +930,6 @@ function hideEmpty() {
         break;
 
       case 'narration':
-        // Текст-пояснення агента перед кожним tool_call
         if (ev.content && ev.content.trim()) {
           addMsg('msg-status', '', '<em style="color:#64748b">' + escHtml(ev.content) + '</em>', '');
         }
@@ -1074,7 +992,7 @@ function hideEmpty() {
           '<span class="dot" style="background:#22c55e;box-shadow:0 0 5px #22c55e"></span> ⚡ ' + t.lAgent,
           renderMarkdown(ev.content || ''),
           '',
-          ev.content // Передаємо сирий Markdown для збереження
+          ev.content
         );
         break;
 

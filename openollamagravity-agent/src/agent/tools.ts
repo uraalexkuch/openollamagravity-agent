@@ -265,16 +265,16 @@ function getPerplexicaUrl(): string {
   return vscode.workspace.getConfiguration('openollamagravity').get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 
-/** 🌐 WEB SEARCH через Perplexica */
+
 /** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
-  // Sanitize query: replace @, #, $ with spaces to prevent server-side 500 errors
+  // Очищення запиту від спецсимволів, які можуть викликати помилку 500
   query = query.replace(/[@#$]/g, ' ');
 
   let website = args?.website || args?.domain;
   if (website) {
-    // Strip http://, https://, and trailing slashes
+    // Видаляємо http:// та зайві слеші
     website = String(website).replace(/^https?:\/\//i, '').split('/')[0];
     query += ` site:${website}`;
   }
@@ -288,19 +288,20 @@ export async function webSearch(args: any): Promise<ToolResult> {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
 
-      // ВИПРАВЛЕННЯ: Додано обов'язкові об'єкти моделей та історію
+      // ВСІ ОБОВ'ЯЗКОВІ ПОЛЯ РАЗОМ
       const bodyData = JSON.stringify({
         query,
         focusMode: args.focusMode || 'webSearch',
+        sources: ['web'], // <--- ПОВЕРНУТО! Обов'язкове поле
         optimizationMode: 'speed',
-        history: [], // Perplexica часто очікує хоча б порожній масив історії
+        history: [],
         chatModel: {
           provider: 'ollama',
-          model: 'gemma3n:latest' // Вкажіть тут модель, яка завантажена у вас в Ollama
+          model: 'llama3.1'
         },
         embeddingModel: {
           provider: 'ollama',
-          model: 'bge-m3:latest' // Вкажіть тут вашу embedding модель
+          model: 'nomic-embed-text'
         }
       });
 
