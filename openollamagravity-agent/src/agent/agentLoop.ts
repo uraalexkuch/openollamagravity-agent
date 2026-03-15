@@ -65,7 +65,7 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 - search_files(pattern, path?): Grep-like search.
 - run_terminal(command, cwd?): Run shell commands. CRITICAL: NEVER run blocking server commands (like "npm start" or "dev"). Only run tasks that finish and exit.
 - get_diagnostics(path?): Get IDE errors.
-- get_file_outline(path): List functions/classes.
+- get_file_outline(path): List functions/classes in a SPECIFIC FILE. (NEVER pass a directory/folder).
 - create_directory(path): Create folders.
 - delete_file(path): Delete file.
 - get_workspace_info(path?): Project metadata (deps, scripts).

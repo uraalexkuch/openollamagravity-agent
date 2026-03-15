@@ -48,22 +48,16 @@ function buildSystemPrompt(language, skills, workspaceContext, workspacePath, wo
 You are an expert AI software engineer. Complete the task efficiently using the tools below.
 
 ### CRITICAL CONSTRAINTS (READ CAREFULLY):
-1. XML Format ONLY: You MUST use the exact XML structure below to call a tool. NEVER write tool calls as plain text or javascript functions.
-<tool_call>
-<name>TOOL_NAME</name>
-<args>{"arg": "val"}</args>
-</tool_call>
-
+1. XML Format ONLY: You MUST wrap every tool call inside <tool_call> tags. NEVER write tool calls as plain text or javascript functions.
 2. Example of a CORRECT tool call:
 <tool_call>
-<name>web_search</name>
-<args>{"query": "latest axios version"}</args>
+<name>list_files</name>
+<args>{"path": ".", "depth": 1}</args>
 </tool_call>
 
 3. Language: Always respond in ${language}.
-4. JSON Escaping: ALWAYS escape double quotes inside JSON strings using double backslashes: \\"text\\". 
-5. Windows Paths: Use double backslashes: "C:\\\\path\\\\to\\\\file".
-6. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
+4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
+5. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
 
 ### TOOLS:
 - read_file(path, start_line?, end_line?): Read file content.
@@ -82,47 +76,35 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 function repairJson(raw) {
-    // 1. Remove trailing commas (e.g., {"a": 1, })
-    let json = raw.replace(/,\s*([}\]])/g, '$1');
-    // 2. Fix unclosed strings and single backslashes in paths
     let result = '';
     let inString = false;
     let i = 0;
-    while (i < json.length) {
-        const ch = json[i];
-        // Toggle string state, ignoring escaped quotes
-        if (ch === '"') {
-            const prev = json[i - 1] ?? '';
-            if (prev !== '\\') {
-                inString = !inString;
+    while (i < raw.length) {
+        const ch = raw[i];
+        if (!inString) {
+            if (ch === '"') {
+                inString = true;
             }
+            result += ch;
+            i++;
+            continue;
         }
-        if (inString && ch === '\\') {
-            const next = json[i + 1] ?? '';
-            // If it's not a valid JSON escape sequence, it's likely a Windows path backslash
-            if (!/["\\\/bfnrtu]/.test(next)) {
-                result += '\\\\';
-                i++;
-                continue;
+        if (ch === '\\') {
+            const next = raw[i + 1] ?? '';
+            if (/["\\\/bfnrtu]/.test(next)) {
+                result += ch + next;
             }
+            else {
+                result += '\\\\' + next;
+            }
+            i += 2;
+            continue;
+        }
+        if (ch === '"') {
+            inString = false;
         }
         result += ch;
         i++;
-    }
-    // 3. Auto-close string if it was left open
-    if (inString) {
-        result += '"';
-    }
-    // 4. Balance braces and brackets
-    const openBraces = (result.match(/{/g) || []).length;
-    const closeBraces = (result.match(/}/g) || []).length;
-    for (let j = 0; j < openBraces - closeBraces; j++) {
-        result += '}';
-    }
-    const openBrackets = (result.match(/\[/g) || []).length;
-    const closeBrackets = (result.match(/\]/g) || []).length;
-    for (let j = 0; j < openBrackets - closeBrackets; j++) {
-        result += ']';
     }
     return result;
 }
@@ -249,12 +231,13 @@ class AgentLoop {
                         : `missing <tool_call> tags for ${forgottenTool}`;
                     this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
                     this._history.push({ role: 'assistant', content: output });
+                    const actualTool = forgottenTool || 'list_files';
                     this._history.push({
                         role: 'user',
                         content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
-                            `You tried to use "${forgottenTool || 'a tool'}" but didn't wrap it correctly.\n` +
+                            `You tried to use a tool but didn't wrap it correctly.\n` +
                             `FIX: You MUST use this exact XML format:\n` +
-                            `<tool_call>\n<name>${forgottenTool || 'TOOL_NAME'}</name>\n<args>{"your": "json args"}</args>\n</tool_call>\n` +
+                            `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
                             `Please retry.`
                     });
                     continue;
