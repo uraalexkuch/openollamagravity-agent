@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { OllamaClient } from '../ollama/client';
 import { AgentLoop, AgentEvent } from '../agent/agentLoop';
 import { gatherContext } from '../workspace/context';
+import * as Tools from '../agent/tools';
 
 // Описуємо типи для повідомлень, які приходять з Webview
 interface WebviewMessage {
@@ -9,6 +10,7 @@ interface WebviewMessage {
   text?: string;
   lang?: string;
   model?: string;
+  selectedSkills?: string[];
 }
 
 export class AgentPanel {
@@ -62,9 +64,9 @@ export class AgentPanel {
 
     this._panel.webview.onDidReceiveMessage(async (msg: WebviewMessage) => {
       switch (msg.type) {
-        case 'task':
-          if (msg.text && msg.text.trim()) {
-            await this._runTask(msg.text.trim(), msg.lang || 'Ukrainian');
+        case 'run_task':
+          if (msg.text) {
+            await this._runTask(msg.text, msg.lang || 'Ukrainian', msg.selectedSkills || []);
           }
           break;
         case 'stop':
@@ -77,10 +79,12 @@ export class AgentPanel {
         case 'ready':
           try {
             const models = await ollama.listModels();
+            const skills = await Tools.getAllSkills();
             this._post({
               type: 'models_list',
               models: models.map(m => m.name),
-              current: this._loop.model || ollama.model
+              current: this._loop.model || ollama.model,
+              skills: skills.map(s => ({ name: s.name, folderName: s.folderName, description: s.description }))
             });
           } catch { /* */ }
           break;
@@ -106,7 +110,7 @@ export class AgentPanel {
     }
   }
 
-  private async _runTask(task: string, language: string = 'Ukrainian') {
+  private async _runTask(task: string, language: string = 'Ukrainian', selectedSkills: string[] = []) {
     if (this._loop.running) {
       vscode.window.showWarningMessage('OpenOllamaGravity: agent is already running. Stop it first.');
       return;
@@ -119,7 +123,7 @@ export class AgentPanel {
     this._post({ type: 'task_start', text: task });
 
     vscode.commands.executeCommand('setContext', 'openollamagravity.running', true);
-    await this._loop.run(task, [], workspaceCtx, language);
+    await this._loop.run(task, [], workspaceCtx, language, '', selectedSkills);
     vscode.commands.executeCommand('setContext', 'openollamagravity.running', false);
   }
 
@@ -204,7 +208,7 @@ export class AgentPanel {
   }
   
   /* ── Selects ── */
-  #model-select, #lang-select {
+  #modelSelect, #lang-select {
     font-family: 'Courier New', Courier, monospace;
     font-size: 11px;
     color: #94a3b8;
@@ -217,23 +221,73 @@ export class AgentPanel {
     appearance: none;
     -webkit-appearance: none;
   }
-  #model-select:hover, #lang-select:hover { border-color: #00e5ff; color: #00e5ff; }
-  #model-select option, #lang-select option { background: #1a1d21; color: #e2e8f0; }
+  #modelSelect:hover, #lang-select:hover { border-color: #00e5ff; color: #00e5ff; }
+  #modelSelect option, #lang-select option { background: #1a1d21; color: #e2e8f0; }
   .select-wrapper { position: relative; display: flex; align-items: center; }
   .select-arrow { position: absolute; right: 6px; pointer-events: none; font-size: 8px; color: #64748b; }
+      .btns button {
+        background: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        padding: 6px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 500;
+        transition: all 0.2s;
+      }
+      .btns button:hover:not(:disabled) {
+        background: #45475a;
+        border-color: #585b70;
+      }
 
-  #btn-clear {
-    background: none;
-    border: 1px solid #2a2d33;
-    border-radius: 6px;
-    color: #64748b;
-    cursor: pointer;
-    padding: 4px 10px;
-    font-size: 11px;
-    font-family: inherit;
-    transition: all .15s;
-  }
-  #btn-clear:hover { border-color: #353940; color: #94a3b8; }
+      /* Skills UI */
+      .skills-panel {
+        background: #1e1e2e;
+        border: 1px solid #313244;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        display: none;
+      }
+      .skills-header {
+        padding: 8px 12px;
+        border-bottom: 1px solid #313244;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        color: #9399b2;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .skills-list {
+        max-height: 200px;
+        overflow-y: auto;
+        padding: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .skill-item {
+        background: #313244;
+        border: 1px solid #45475a;
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 10px;
+        color: #cdd6f4;
+        cursor: pointer;
+        user-select: none;
+      }
+      .skill-item.selected {
+        background: #f59e0b;
+        color: #11111b;
+        border-color: #f59e0b;
+      }
+      .skill-item:hover {
+        border-color: #f5bde6;
+      }
 
   /* ── Progress ── */
   #progress-wrap { height: 3px; background: #131618; flex-shrink: 0; display: none; }
@@ -502,7 +556,7 @@ export class AgentPanel {
     </div>
 
     <div class="select-wrapper">
-      <select id="model-select" title="Обрати модель"></select>
+      <select id="modelSelect" title="Обрати модель"></select>
       <span class="select-arrow">▼</span>
     </div>
     
@@ -516,7 +570,15 @@ export class AgentPanel {
       <div class="big">&#x26A1;</div>
       <div class="title" id="empty-title">OpenOllamaGravity Agent</div>
       <div class="sub" id="empty-sub">Автономний агент на базі Ollama.<br>Планує, читає, пише, запускає — офлайн.</div>
-      <div class="hints">
+      <div class="skills-panel" id="skillsPanel">
+        <div class="skills-header" onclick="toggleSkills()">
+          <span>📚 SELECT SKILLS (<span id="skillsCount">0</span> selected)</span>
+          <span id="skillsArrow">▼</span>
+        </div>
+        <div class="skills-list" id="skillsList"></div>
+      </div>
+
+      <div class="btns">
         <div class="hint" id="hint1" data-hint="Поясни структуру цього проєкту">📁 Поясни структуру цього проєкту</div>
         <div class="hint" id="hint2" data-hint="Знайди та виправ баги у відкритому файлі">🐛 Знайди та виправ баги у відкритому файлі</div>
         <div class="hint" id="hint3" data-hint="Напиши unit-тести для виділеного коду">✅ Напиши unit-тести для виділеного коду</div>
@@ -555,7 +617,12 @@ export class AgentPanel {
   var progBar   = document.getElementById('progress-bar');
   var thinkLive = document.getElementById('thinking-live');
   var thinkStep = document.getElementById('thinking-step');
-  var modelSelect = document.getElementById('model-select');
+    var modelSelect = document.getElementById('modelSelect');
+    var skillsPanel = document.getElementById('skillsPanel');
+    var skillsList  = document.getElementById('skillsList');
+    var skillsCount = document.getElementById('skillsCount');
+    var allSkills   = [];
+    var selectedSkills = new Set();
   var langSelect  = document.getElementById('lang-select');
 
   var isRunning      = false;
@@ -696,10 +763,26 @@ export class AgentPanel {
     if (!text || isRunning) return;
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    vscode.postMessage({ type: 'task', text: text, lang: currentLang });
-  }
+      vscode.postMessage({
+        type: 'run_task',
+        text: text,
+        lang: langSelect.value,
+        selectedSkills: Array.from(selectedSkills)
+      });
+    }
 
-  function hideEmpty() {
+    window.toggleSkills = function() {
+      var list = document.getElementById('skillsList');
+      var arrow = document.getElementById('skillsArrow');
+      if (list.style.display === 'none') {
+        list.style.display = 'flex';
+        arrow.textContent = '▲';
+      } else {
+        list.style.display = 'none';
+        arrow.textContent = '▼';
+      }
+    };
+function hideEmpty() {
     emptyEl.style.display = 'none';
   }
 
@@ -860,7 +943,32 @@ export class AgentPanel {
         if (m === data.current) opt.selected = true;
         modelSelect.appendChild(opt);
       });
+
+      // Рендеримо скіли
+      if (data.skills && data.skills.length > 0) {
+        allSkills = data.skills;
+        skillsPanel.style.display = 'block';
+        skillsList.style.display = 'none'; // за замовчуванням приховано
+        renderSkills();
+      }
       return;
+    }
+
+    function renderSkills() {
+      skillsList.innerHTML = '';
+      allSkills.forEach(function(s) {
+        var sk = document.createElement('div');
+        sk.className = 'skill-item' + (selectedSkills.has(s.folderName) ? ' selected' : '');
+        sk.textContent = s.name;
+        sk.title = s.description;
+        sk.onclick = function() {
+          if (selectedSkills.has(s.folderName)) selectedSkills.delete(s.folderName);
+          else selectedSkills.add(s.folderName);
+          renderSkills();
+          skillsCount.textContent = selectedSkills.size;
+        };
+        skillsList.appendChild(sk);
+      });
     }
 
     if (data.type === 'task_start') {

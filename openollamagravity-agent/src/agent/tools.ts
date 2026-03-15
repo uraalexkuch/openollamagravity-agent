@@ -42,9 +42,42 @@ export interface LoadedSkill extends SkillMeta {
   content: string;  // повний текст SKILL.md
 }
 
+/** Повертає список метаданих всіх доступних скілів для UI */
+export async function getAllSkills(): Promise<SkillMeta[]> {
+  const skillsPath = getSkillsPath();
+  if (!skillsPath || !fs.existsSync(skillsPath)) return [];
+
+  const files = scanSkillFolders(skillsPath);
+  const result: SkillMeta[] = [];
+
+  for (const filePath of files) {
+    const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+    const yaml = readFrontmatter(filePath);
+    if (yaml) {
+      const p = parseYaml(yaml);
+      result.push({
+        filePath, folderName,
+        name:        String(p['name']        || folderName),
+        description: String(p['description'] || ''),
+        domain:      String(p['domain']      || ''),
+        subdomain:   String(p['subdomain']   || ''),
+        tags:        Array.isArray(p['tags']) ? p['tags'] : [],
+        score:       0,
+      });
+    } else {
+      result.push({
+        filePath, folderName,
+        name: folderName, description: '', domain: '', subdomain: '',
+        tags: [], score: 0
+      });
+    }
+  }
+  return result;
+}
+
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
-function getSkillsPath(): string {
+export function getSkillsPath(): string {
   return vscode.workspace.getConfiguration('openollamagravity').get<string>('skillsPath', '');
 }
 
@@ -417,7 +450,7 @@ function extractQueryTokens(text: string): string[] {
  * @param alreadyLoaded папки вже завантажених скілів
  * @param minScore      мінімальний score (вищий = суворіший фільтр)
  */
-function scanAndScoreAllSkillsIdf(
+export function scanAndScoreAllSkillsIdf(
     combined:      string,
     alreadyLoaded: Set<string> = new Set(),
     minScore       = 4,
@@ -521,7 +554,7 @@ function scanAndScoreAllSkills(
 }
 
 /** Завантажує ПОВНИЙ текст для топ-N скілів зі списку. */
-function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
+export function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
   const loaded: LoadedSkill[] = [];
   for (const meta of scored.slice(0, maxSkills)) {
     try {

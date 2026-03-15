@@ -52,112 +52,38 @@ const Tools = __importStar(require("./tools"));
 // ─────────────────────────────────────────────────────────────────────────────
 // ── СИСТЕМНИЙ ПРОМПТ ──────────────────────────────────────────────────────────
 function buildSystemPrompt(language, skills, workspaceContext, workspacePath, workspaceRoot) {
-    // Блок підібраних скілів — вставляємо ПОВНИЙ текст кожного
-    const skillsBlock = skills.length === 0 ? '' : [
-        '',
-        `━━━ SKILLS FOR THIS TASK (${skills.length}) ━━━`,
-        'These skills were automatically matched to your task.',
-        'Follow their workflows, commands, prerequisites and verification steps.',
-        '',
-        ...skills.map(s => `### SKILL: ${s.name}\n` +
-            `<!-- folder: ${s.folderName} | relevance score: ${s.score} -->\n\n` +
-            s.content),
-        '━━━ END OF SKILLS ━━━',
-    ].join('\n');
-    // Контекст workspace (активний файл, package.json тощо)
-    const wsBlock = workspaceContext
-        ? `\n\nWORKSPACE CONTEXT:\n${workspaceContext}`
-        : '';
-    // Реальний шлях до workspace — агент використовує для побудови шляхів
-    // workspaceRoot — абсолютний шлях до кореня відкритого проекту
-    // Агент ЗОБОВ'ЯЗАНИЙ використовувати цей шлях і не вигадувати свій
-    const rootBlock = (workspaceRoot || workspacePath)
-        ? `\n\nWORKSPACE ROOT: ${workspaceRoot || workspacePath}\n`
-            + `When working within the project, use this path as your base.\n`
-            + `CROSS-PROJECT ACCESS: You can access, read, and edit files in ANY project on the user's computer by using absolute paths in tool arguments.`
-        : '';
-    return `You are an advanced autonomous coding and cybersecurity agent.
-You always explain what you are doing so the user understands your progress.
+    const skillsBlock = skills.length === 0 ? '' : `\n\n### SKILLS:\n` + skills.map(s => `#### ${s.name}\n${s.content}`).join('\n');
+    const wsBlock = workspaceContext ? `\n\n### WORKSPACE CONTEXT:\n${workspaceContext}` : '';
+    const rootPath = workspaceRoot || workspacePath;
+    const rootBlock = rootPath ? `\n\n### WORKSPACE ROOT: ${rootPath}\nCross-project access: Use absolute paths to access any files on this computer.` : '';
+    return `
+### MISSION:
+You are an expert AI software engineer. Complete the task efficiently using the tools below.
 
-OUTPUT FORMAT & TOOL CALLING:
-- You are an autonomous agent. You MUST continue calling tools until you have all the information needed to finish the task.
-- When you need to call a tool, write 1-2 sentences in ${language} explaining WHAT you found or plan to do, THEN the tool call wrapped in XML tags.
-- NEVER output tool names or JSON directly. ALWAYS wrap in <tool_call> tags.
-- CONTINUATION RULE: Do NOT provide a final answer until you have actually verified your changes or confirmed the required information. If you just called a tool, wait for the <tool_result> before concluding.
-
-Example of a CORRECT tool call:
-  Починаю з огляду структури проекту.
-  <tool_call>
-  <name>list_files</name>
-  <args>{"path": "D:\\\\web_project"}</args>
-  </tool_call>
-
-NARRATION RULES:
-- Write 1-2 sentences BEFORE every tool call.
-- After reading a file → mention detected language or framework.
-- For web_search: explain WHY you are searching.
-
-AVAILABLE TOOLS:
-1. read_file(path, start_line?, end_line?)
-   - Read file contents, optionally limited to a line range
-2. write_file(path, content, mode?)
-   - Write a file. mode: "overwrite" (default) or "append"
-3. edit_file(path, start_line, end_line, new_content)
-   - Replace specific lines in a file
-4. list_files(path?, depth?)
-   - List directory tree (depth 1-5, default 3)
-5. search_files(pattern, path?, file_pattern?)
-   - Regex search across files. file_pattern filters by filename
-6. run_terminal(command, cwd?)
-   - Execute an allowed shell command
-7. get_diagnostics(path?)
-   - Get VSCode errors/warnings, optionally for one file
-8. get_file_outline(path)
-   - Get symbols/functions/classes in a file
-9. create_directory(path)
-   - Create a directory (including parents)
-10. delete_file(path)
-    - Delete a file (requires user confirmation)
-11. get_workspace_info(path?)
-    - Get project type, name, dependencies, and scripts for a specific path or the current root
-12. web_search(query)
-    - Search the internet/documentation for solutions or info (via Perplexica)
-13. list_skills()
-    - List available skill files and guides from the antigravity-awesome-skills repository
-14. read_skill(name)
-    - Read a specific skill file to learn best practices and instructions
-
-HOW TO CALL A TOOL:
+### CONSTRAINTS:
+1. Format Tool Calls as XML:
 <tool_call>
 <name>TOOL_NAME</name>
-<args>{"arg1": "value1", "arg2": "value2"}</args>
+<args>{"arg": "val"}</args>
 </tool_call>
+2. Language: Always respond in ${language}.
+3. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
+4. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
 
-0. CONTEXT GATHERING: If the task involves a specific path or project, ALWAYS start by calling list_files and get_workspace_info(path) to understand the real architecture, dependencies, and available scripts. NEVER assume project technology (e.g., don't assume Express if it's NestJS).
-1. PLANNING: Before making any file changes, you MUST output a structured plan in the chat using exactly this format:
-   ### Proposed Changes
-   - [Module/Component Name]: Explain the logic changes based on the ACTUAL code you read. List files to modify.
-   ### Verification Plan
-   - Explain how you will test these changes (e.g., what terminal commands you will run, what manual steps are required). Use the scripts found in get_workspace_info.
-2. EXECUTION: Execute your plan using tools (edit_file, write_file). Use absolute paths if working on external projects.
-3. VERIFICATION: Use "run_terminal" to build/test the project and verify your changes. Fix any errors that arise.
-4. REPORTING: When the task is fully complete and verified, provide a final report in the chat using exactly this format:
-   ### Walkthrough
-   - Briefly explain what was done.
-   ### Changes Made
-   - [Project/Folder Name]: Detailed list of modifications.
-   ### Verification Results
-   - Provide the output of your self-tests, terminal commands, or explain how it was verified. Include any "NOTE" sections if manual intervention (like DB migrations) is needed.
-
-TECHNICAL RULES:
-1. ALWAYS communicate, explain, and write your final answers in ${language}. This is a strict requirement.
-2. Think step by step. Before writing code, read the relevant files first.
-3. Only call ONE tool per response turn.
-4. After the tool result, continue reasoning or call another tool.
-5. WINDOWS PATHS — always double backslash in JSON args (e.g. {"path": "D:\\\\web_project\\\\src\\\\main.ts"}).
-6. CROSS-PROJECT ACCESS: You can access files, read, edit, and run commands in ANY project on the user's computer by using absolute paths (e.g., "D:\\\\web_project\\\\intern50\\\\backend") in tool arguments (path, cwd).
-7. Prefer small targeted edits (edit_file) over full rewrites (write_file) when possible.
-8. SELF-TESTING: You MUST verify your changes! Use "run_terminal" to run builds (e.g. "npm run start:dev", "npm run build", "tsc") or tests in the target project's directory (using the 'cwd' argument) to ensure everything compiles and works without errors.
+### TOOLS:
+- read_file(path, start_line?, end_line?): Read file content.
+- write_file(path, content): Create/Overwrite file.
+- edit_file(path, start_line, end_line, new_content): Replace lines.
+- list_files(path?, depth?): List directories.
+- search_files(pattern, path?): Grep-like search.
+- run_terminal(command, cwd?): Run shell commands.
+- get_diagnostics(path?): Get IDE errors.
+- get_file_outline(path): List functions/classes.
+- create_directory(path): Create folders.
+- delete_file(path): Delete file.
+- get_workspace_info(path?): Project metadata (deps, scripts).
+- web_search(query): Internet search.
+- list_skills(), read_skill(name): View best practices.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 // ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
@@ -291,37 +217,35 @@ class AgentLoop {
         // При продовженні діалогу скіли вже вбудовані в перший system-message.
         let loadedSkills = [];
         if (this._history.length === 0) {
+            /*
             try {
-                // tools.ts:
-                //   scanSkillFolders() — рекурсивно знаходить всі SKILL.md
-                //   readFrontmatter()  — читає лише перші 2 KB (YAML, ~30-50 токенів)
-                //   scoreSkill()       — tags×3, description×2, name/folder×1
-                //   Завантажуємо ПОВНИЙ текст лише топ-N скілів
-                // Об'єднуємо задачу + контекст + шлях проекту для пошуку скілів
-                const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
-                loadedSkills = await Tools.autoLoadSkillsForTask(taskContext, workspaceContext, 3);
+              const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
+              loadedSkills = await Tools.autoLoadSkillsForTask(taskContext, workspaceContext, 3);
+            } catch (e: any) {
+              oogLogger.appendLine(`[Agent] Skills auto-load error: ${e.message}`);
             }
-            catch (e) {
-                client_1.oogLogger.appendLine(`[Agent] Skills auto-load error: ${e.message}`);
-            }
+      
             if (loadedSkills.length > 0) {
-                // КРОК 2: повідомляємо UI
-                this.emit({
-                    type: 'skills_loaded',
-                    content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-                    skills: loadedSkills.map(s => ({
-                        name: s.name,
-                        folderName: s.folderName,
-                        description: s.description,
-                        score: s.score,
-                    })),
-                });
-                client_1.oogLogger.appendLine('[Agent] Скіли для задачі:\n' +
-                    loadedSkills.map(s => `  • [${s.score}] ${s.folderName}  →  "${s.name}"`).join('\n'));
+              this.emit({
+                type:    'skills_loaded',
+                content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
+                skills:  loadedSkills.map(s => ({
+                  name:        s.name,
+                  folderName:  s.folderName,
+                  description: s.description,
+                  score:       s.score,
+                })),
+              });
+              oogLogger.appendLine(
+                  '[Agent] Скіли для задачі:\n' +
+                  loadedSkills.map(s =>
+                      `  • [${s.score}] ${s.folderName}  →  "${s.name}"`
+                  ).join('\n')
+              );
+            } else {
+              oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
             }
-            else {
-                client_1.oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
-            }
+            */
             // КРОК 3: формуємо системний промпт з вбудованими скілами
             // workspacePath беремо напряму з VSCode — агент використовує його для шляхів
             const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
