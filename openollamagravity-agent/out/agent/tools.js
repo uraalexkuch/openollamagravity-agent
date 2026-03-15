@@ -41,6 +41,12 @@ exports.writeFile = writeFile;
 exports.listFiles = listFiles;
 exports.runTerminal = runTerminal;
 exports.createDirectory = createDirectory;
+exports.deleteFile = deleteFile;
+exports.editFile = editFile;
+exports.searchFiles = searchFiles;
+exports.getDiagnostics = getDiagnostics;
+exports.getFileOutline = getFileOutline;
+exports.getWorkspaceInfo = getWorkspaceInfo;
 exports.listSkills = listSkills;
 exports.readSkill = readSkill;
 // Copyright (c) 2026 Юрій Кучеренко.
@@ -800,8 +806,185 @@ async function runTerminal(args, onConfirm) {
 }
 async function createDirectory(args) {
     try {
+        if (!args.path)
+            return { ok: false, output: 'Помилка: вкажіть "path".' };
         fs.mkdirSync(resolvePath(args.path), { recursive: true });
-        return { ok: true, output: `Created: ${args.path}` };
+        return { ok: true, output: `Created directory: ${args.path}` };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function deleteFile(args, onConfirm) {
+    try {
+        if (!args.path)
+            return { ok: false, output: 'Помилка: вкажіть "path".' };
+        const abs = resolvePath(args.path);
+        if (!fs.existsSync(abs))
+            return { ok: false, output: 'File not found.' };
+        if (!await onConfirm(args.path))
+            return { ok: false, output: 'Rejected.' };
+        fs.unlinkSync(abs);
+        return { ok: true, output: `Deleted: ${args.path}` };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function editFile(args, onConfirm) {
+    try {
+        if (!args.path || args.start_line === undefined || args.end_line === undefined || args.new_content === undefined) {
+            return { ok: false, output: 'Missing path, start_line, end_line, or new_content' };
+        }
+        const abs = resolvePath(args.path);
+        if (!fs.existsSync(abs))
+            return { ok: false, output: 'File not found.' };
+        const content = fs.readFileSync(abs, 'utf8');
+        const lines = content.split('\n');
+        const start = Math.max(1, Number(args.start_line)) - 1;
+        const end = Math.min(lines.length, Number(args.end_line));
+        // Create diff preview
+        const oldLines = lines.slice(start, end).join('\n');
+        const diff = `--- OLD\n+++ NEW\n-${oldLines}\n+${args.new_content}`;
+        if (!await onConfirm(args.path, diff))
+            return { ok: false, output: 'Rejected.' };
+        lines.splice(start, end - start, args.new_content);
+        fs.writeFileSync(abs, lines.join('\n'), 'utf8');
+        return { ok: true, output: `Edited ${args.path} lines ${start + 1}-${end}` };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function searchFiles(args) {
+    try {
+        if (!args.pattern)
+            return { ok: false, output: 'Missing pattern.' };
+        const base = resolvePath(args.path || '.');
+        if (!fs.existsSync(base))
+            return { ok: false, output: 'Path not found.' };
+        const fileExt = args.file_pattern ? args.file_pattern.replace(/\*/g, '') : '';
+        const regex = new RegExp(args.pattern, 'i'); // case-insensitive search
+        const results = [];
+        function walk(dir, depth) {
+            if (depth > 6 || results.length > 50)
+                return; // limit depth and results
+            let entries;
+            try {
+                entries = fs.readdirSync(dir);
+            }
+            catch {
+                return;
+            }
+            for (const e of entries) {
+                if (SKIP_DIRS.has(e) || e.startsWith('.'))
+                    continue;
+                const full = path.join(dir, e);
+                try {
+                    const stat = fs.statSync(full);
+                    if (stat.isDirectory()) {
+                        walk(full, depth + 1);
+                    }
+                    else {
+                        if (fileExt && !e.includes(fileExt))
+                            continue;
+                        if (stat.size > 2 * 1024 * 1024)
+                            continue; // skip >2mb files
+                        const content = fs.readFileSync(full, 'utf8');
+                        const lines = content.split('\n');
+                        for (let i = 0; i < lines.length; i++) {
+                            if (regex.test(lines[i])) {
+                                const rel = path.relative(resolvePath('.'), full);
+                                results.push(`${rel}:${i + 1}: ${lines[i].trim()}`);
+                                if (results.length > 50)
+                                    break;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        walk(base, 1);
+        const msg = results.length > 50 ? '\n[Truncated to 50 results]' : '';
+        return { ok: true, output: results.join('\n') + msg || 'No matches found.' };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function getDiagnostics(args) {
+    try {
+        const filterPath = args.path ? resolvePath(args.path) : undefined;
+        const diags = vscode.languages.getDiagnostics();
+        const result = [];
+        for (const [uri, fileDiags] of diags) {
+            if (fileDiags.length === 0)
+                continue;
+            if (filterPath && uri.fsPath !== filterPath)
+                continue;
+            const relPath = path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', uri.fsPath);
+            result.push(`=== ${relPath} ===`);
+            for (const d of fileDiags) {
+                const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' :
+                    d.severity === vscode.DiagnosticSeverity.Warning ? 'WARN' : 'INFO';
+                result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'uknown'})`);
+            }
+        }
+        return { ok: true, output: result.length > 0 ? result.join('\n') : 'No diagnostics found. Everything looks clean!' };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function getFileOutline(args) {
+    try {
+        if (!args.path)
+            return { ok: false, output: 'Missing path.' };
+        const abs = resolvePath(args.path);
+        const uri = vscode.Uri.file(abs);
+        // We execute the built-in VSCode document symbol provider
+        const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
+        if (!symbols || symbols.length === 0) {
+            return { ok: true, output: 'No Document Symbols found or not supported for this file type yet.' };
+        }
+        const lines = [];
+        function printSymbols(syms, indent) {
+            for (const s of syms) {
+                const kind = vscode.SymbolKind[s.kind] || 'Unknown';
+                lines.push(`${indent}[${kind}] ${s.name} (Lines ${s.range.start.line + 1}-${s.range.end.line + 1})`);
+                if (s.children && s.children.length > 0) {
+                    printSymbols(s.children, indent + '  ');
+                }
+            }
+        }
+        printSymbols(symbols, '');
+        return { ok: true, output: lines.join('\n') };
+    }
+    catch (e) {
+        return { ok: false, output: e.message };
+    }
+}
+async function getWorkspaceInfo() {
+    try {
+        // Re-use context.ts logic or a lightweight version
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!root)
+            return { ok: false, output: 'No active workspace.' };
+        const pkgPath = path.join(root, 'package.json');
+        let out = `Workspace root: ${root}\n`;
+        if (fs.existsSync(pkgPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                out += `Project: ${pkg.name || 'Unknown'}\n`;
+                out += `Scripts: ${Object.keys(pkg.scripts || {}).join(', ')}\n`;
+                out += `Deps: ${Object.keys(pkg.dependencies || {}).join(', ')}\n`;
+                out += `DevDeps: ${Object.keys(pkg.devDependencies || {}).join(', ')}\n`;
+            }
+            catch { }
+        }
+        out += `\nTo list initial files, use list_files.`;
+        return { ok: true, output: out };
     }
     catch (e) {
         return { ok: false, output: e.message };

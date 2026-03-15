@@ -103,17 +103,57 @@ NARRATION RULES:
 - For web_search: explain WHY you are searching and what you expect to find
 
 AVAILABLE TOOLS:
-- name: list_files        args: {"path": "...", "depth": 3}
-- name: read_file         args: {"path": "..."}
-- name: write_file        args: {"path": "...", "content": "..."}
-- name: run_terminal      args: {"command": "...", "cwd": "..."}
-- name: create_directory  args: {"path": "..."}
-- name: list_skills       args: {}
-- name: read_skill        args: {"name": "folder-name-of-skill"}
-- name: web_search        args: {"query": "...", "focus": "webSearch", "maxResults": 5}
-  focus options: webSearch | academicSearch | wolframAlphaSearch
-  USE web_search when: task needs current docs, library versions, CVEs, error solutions,
-  recent news, or any information that may not be in your training data.
+1. read_file(path, start_line?, end_line?)
+   - Read file contents, optionally limited to a line range
+2. write_file(path, content, mode?)
+   - Write a file. mode: "overwrite" (default) or "append"
+3. edit_file(path, start_line, end_line, new_content)
+   - Replace specific lines in a file
+4. list_files(path?, depth?)
+   - List directory tree (depth 1-5, default 3)
+5. search_files(pattern, path?, file_pattern?)
+   - Regex search across files. file_pattern filters by filename
+6. run_terminal(command, cwd?)
+   - Execute an allowed shell command
+7. get_diagnostics(path?)
+   - Get VSCode errors/warnings, optionally for one file
+8. get_file_outline(path)
+   - Get symbols/functions/classes in a file
+9. create_directory(path)
+   - Create a directory (including parents)
+10. delete_file(path)
+    - Delete a file (requires user confirmation)
+11. get_workspace_info()
+    - Get project type, name, dependencies
+12. web_search(query)
+    - Search the internet/documentation for solutions or info (via Perplexica)
+13. list_skills()
+    - List available skill files and guides from the antigravity-awesome-skills repository
+14. read_skill(name)
+    - Read a specific skill file to learn best practices and instructions
+
+HOW TO CALL A TOOL:
+<tool_call>
+<name>TOOL_NAME</name>
+<args>{"arg1": "value1", "arg2": "value2"}</args>
+</tool_call>
+
+WORKFLOW RULES FOR PROJECTS & LARGE TASKS:
+0. SKILLS CHECK: Whenever you receive a new task, ALWAYS use list_skills() and read_skill(name) to check for standard instructions.
+1. PLANNING: Before making any file changes, you MUST output a structured plan in the chat using exactly this format:
+   ### Proposed Changes
+   - [Module/Component Name]: Explain the logic changes and list files to modify.
+   ### Verification Plan
+   - Explain how you will test these changes (e.g., what terminal commands you will run, what manual steps are required).
+2. EXECUTION: Execute your plan using tools (edit_file, write_file). Use absolute paths if working on external projects.
+3. VERIFICATION: Use "run_terminal" to build/test the project and verify your changes. Fix any errors that arise.
+4. REPORTING: When the task is fully complete and verified, provide a final report in the chat using exactly this format:
+   ### Walkthrough
+   - Briefly explain what was done.
+   ### Changes Made
+   - [Project/Folder Name]: Detailed list of modifications.
+   ### Verification Results
+   - Provide the output of your self-tests, terminal commands, or explain how it was verified. Include any "NOTE" sections if manual intervention (like DB migrations) is needed.
 
 TECHNICAL RULES:
 1. ONE <tool_call> block per response — at the end, after narration.
@@ -412,9 +452,15 @@ class AgentLoop {
         switch (name) {
             case 'read_file': return Tools.readFile(args);
             case 'write_file': return Tools.writeFile(args, p => confirm(`Записати у ${p}`));
+            case 'edit_file': return Tools.editFile(args, (p, d) => confirm(`Редагувати ${p}:\n${d}`));
             case 'list_files': return Tools.listFiles(args);
+            case 'search_files': return Tools.searchFiles(args);
             case 'run_terminal': return Tools.runTerminal(args, c => confirm(`Запустити: ${c}`));
+            case 'get_diagnostics': return Tools.getDiagnostics(args);
+            case 'get_file_outline': return Tools.getFileOutline(args);
             case 'create_directory': return Tools.createDirectory(args);
+            case 'delete_file': return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`));
+            case 'get_workspace_info': return Tools.getWorkspaceInfo();
             // Fallback: агент сам запитує скіл якщо авто-підбір не вистачив
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
@@ -423,8 +469,8 @@ class AgentLoop {
                 return {
                     ok: false,
                     output: `CRITICAL ERROR: Unknown tool "${name}". ` +
-                        `Valid tools: read_file, write_file, list_files, run_terminal, ` +
-                        `create_directory, list_skills, read_skill, web_search. ` +
+                        `Valid tools: read_file, write_file, edit_file, list_files, search_files, run_terminal, ` +
+                        `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search. ` +
                         `Fix your <tool_call> and use an exact tool name from the list.`,
                 };
         }

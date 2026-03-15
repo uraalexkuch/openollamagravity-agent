@@ -892,6 +892,13 @@ export class AgentPanel {
           thinkStep.textContent = t.step + ' ' + ev.step + ' / ' + ev.totalSteps;
         }
         thinkLive.style.display = 'flex';
+        if (!currentThinkEl) {
+          currentThinkEl = addMsg('msg-thinking',
+            '<span class="dot" style="background:#7c3aed"></span> ' + t.lThink,
+            '',
+            ''
+          );
+        }
         break;
 
       case 'narration':
