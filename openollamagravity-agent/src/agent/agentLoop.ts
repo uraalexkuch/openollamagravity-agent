@@ -4,17 +4,7 @@ import { OllamaClient, OllamaMessage, oogLogger } from '../ollama/client';
 import * as Tools from './tools';
 import type { LoadedSkill } from './tools';
 
-export type AgentEventType =
-    | 'thinking'
-    | 'tool_call'
-    | 'tool_result'
-    | 'answer'
-    | 'error'
-    | 'done'
-    | 'step'
-    | 'narration'         // пояснення агента перед викликом інструменту
-    | 'skills_loaded'     // початковий підбір скілів по задачі
-    | 'skills_discovered'; // динамічний пошук під час виконання
+export type AgentEventType = 'thinking' | 'tool_call' | 'tool_result' | 'answer' | 'error' | 'done' | 'step' | 'narration' | 'skills_loaded' | 'skills_discovered';
 
 export interface AgentEvent {
   type:        AgentEventType;
@@ -24,35 +14,11 @@ export interface AgentEvent {
   ok?:         boolean;
   step?:       number;
   totalSteps?: number;
-  /** skills_loaded / skills_discovered — список скілів для UI */
   skills?:     Array<{ name: string; folderName: string; description: string; score: number }>;
-  /** skills_discovered — які сигнали спрацювали */
   signals?:    string[];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ПОРЯДОК РОБОТИ (перевірений):
-//
-//  1. run(task) викликається з UI
-//  2. autoLoadSkillsForTask(task) — сканує skills\, читає лише frontmatter,
-//     скорує по тексту задачі, завантажує ПОВНИЙ текст топ-3 скілів
-//  3. emit('skills_loaded') — UI показує які скіли підібрано
-//  4. buildSystemPrompt(language, skills, wsCtx, wsPath, wsRoot) — формує промпт
-//  5. history = [system, ...contextMessages, user:task]
-//  6. Цикл кроків: LLM → parseToolCall → executeTool → history → наступний крок
-//  7. Якщо LLM не повертає <tool_call> — emit('answer'), кінець
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ── СИСТЕМНИЙ ПРОМПТ ──────────────────────────────────────────────────────────
-
-function buildSystemPrompt(
-    language:         string,
-    skills:           LoadedSkill[],
-    workspaceContext: string,
-    workspacePath:    string,
-    workspaceRoot:    string,
-): string {
-
+function buildSystemPrompt(language: string, skills: LoadedSkill[], workspaceContext: string, workspacePath: string, workspaceRoot: string): string {
   const skillsBlock = skills.length === 0 ? '' : `\n\n### SKILLS:\n` + skills.map(s => `#### ${s.name}\n${s.content}`).join('\n');
   const wsBlock = workspaceContext ? `\n\n### WORKSPACE CONTEXT:\n${workspaceContext}` : '';
   const rootPath = workspaceRoot || workspacePath;
@@ -63,14 +29,15 @@ function buildSystemPrompt(
 You are an expert AI software engineer. Complete the task efficiently using the tools below.
 
 ### CONSTRAINTS:
+1. XML Format ONLY: Use the exact structure below for calling tools:
 <tool_call>
 <name>TOOL_NAME</name>
 <args>{"arg": "val"}</args>
 </tool_call>
 2. Exact Tags: Use ONLY <tool_call>, <name>, and <args>. Do NOT use <n>.
 3. Language: Always respond in ${language}.
-3. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
-4. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
+4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
+5. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
 
 ### TOOLS:
 - read_file(path, start_line?, end_line?): Read file content.
@@ -78,7 +45,7 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 - edit_file(path, start_line, end_line, new_content): Replace lines.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.
-- run_terminal(command, cwd?): Run shell commands.
+- run_terminal(command, cwd?): Run shell commands. CRITICAL: NEVER run blocking server commands (like "npm start" or "dev"). Only run tasks that finish and exit.
 - get_diagnostics(path?): Get IDE errors.
 - get_file_outline(path): List functions/classes.
 - create_directory(path): Create folders.
@@ -89,96 +56,53 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 
-
-
-// ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
-
-/**
- * Виправляє JSON з Windows-шляхами та іншими некоректними backslash.
- *
- * Проблема: LLM генерує {"path": "D:\web_project\src"} де \w, \s — не валідні
- * JSON escape → JSON.parse кидає SyntaxError.
- *
- * Рішення: посимвольний обхід JSON-рядків, подвоюємо лише невалідні escapes.
- * Валідні JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
- */
 function repairJson(raw: string): string {
-  let result = '';
-  let inString = false;
-  let i = 0;
-
+  let result = ''; let inString = false; let i = 0;
   while (i < raw.length) {
     const ch = raw[i];
-
     if (!inString) {
-      if (ch === '"') { inString = true; }
-      result += ch;
-      i++;
-      continue;
+      if (ch === '"') inString = true;
+      result += ch; i++; continue;
     }
-
     if (ch === '\\') {
       const next = raw[i + 1] ?? '';
-      if (/["\\\/bfnrtu]/.test(next)) {
-        result += ch + next;   // валідний escape — залишаємо
-      } else {
-        result += '\\\\' + next; // невалідний escape — подвоюємо backslash
-      }
-      i += 2;
-      continue;
+      if (/["\\\/bfnrtu]/.test(next)) result += ch + next;
+      else result += '\\\\' + next;
+      i += 2; continue;
     }
-
-    if (ch === '"') { inString = false; }
-    result += ch;
-    i++;
+    if (ch === '"') inString = false;
+    result += ch; i++;
   }
-
   return result;
 }
 
-/**
- * Парсить <tool_call> блок з відповіді LLM.
- * Три спроби: прямий parse → auto-repair → error повернення агенту.
- * Ніколи не ковтає помилку мовчки — агент завжди знає що пішло не так.
- */
-function parseToolCall(text: string): {
-  name:        string;
-  args:        any;
-  narration:   string;   // текст до <tool_call> — пояснення агента
-  parseError?: string;
-} | null {
+function parseToolCall(text: string): { name: string; args: any; narration: string; parseError?: string; } | null {
   const block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
   if (!block) return null;
 
-  // Витягуємо текст ДО <tool_call> — це пояснення/нарація агента
   const blockStart = text.indexOf('<tool_call>');
   const narration  = text.slice(0, blockStart).trim();
-
   const inner = block[1];
 
-  const nameMatch =
-      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
-      inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
-      inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
+  const nameMatch = inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) || inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) || inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
   if (!nameMatch) return null;
   const name = nameMatch[1].trim();
 
   const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
   if (!argsMatch) return { name, narration, args: {} };
 
-  const raw = argsMatch[1].trim();
+  let raw = argsMatch[1].trim();
   if (!raw || raw === '{}') return { name, narration, args: {} };
 
-  // Спроба 1: прямий parse
-  try { return { name, narration, args: JSON.parse(raw) }; } catch { /* next */ }
+  // Очищення від випадкових бектиків (Markdown) у яких LLM часто ховає JSON
+  raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
 
-  // Спроба 2: auto-repair backslash
+  try { return { name, narration, args: JSON.parse(raw) }; } catch { /* next */ }
   try {
     const args = JSON.parse(repairJson(raw));
     oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
     return { name, narration, args };
   } catch (e: any) {
-    // Спроба 3: повертаємо parseError — агент отримає конкретне повідомлення
     const preview = raw.slice(0, 120).replace(/\n/g, ' ');
     const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
     oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
@@ -186,16 +110,13 @@ function parseToolCall(text: string): {
   }
 }
 
-// ── AGENT LOOP ────────────────────────────────────────────────────────────────
-
 export class AgentLoop {
-  private _history:        OllamaMessage[] = [];
-  private _listeners:      ((ev: AgentEvent) => void)[] = [];
-  private _abortCtrl?:     AbortController;
-  /** Множина folderName вже завантажених скілів — для дедуплікації при динамічному пошуку */
-  private _loadedFolders:  Set<string> = new Set();
+  private _history: OllamaMessage[] = [];
+  private _listeners: ((ev: AgentEvent) => void)[] = [];
+  private _abortCtrl?: AbortController;
+  private _loadedFolders: Set<string> = new Set();
   public running = false;
-  public model?:  string;
+  public model?: string;
 
   constructor(private _ollama: OllamaClient) {}
 
@@ -204,46 +125,14 @@ export class AgentLoop {
   private emit(ev: AgentEvent)      { this._listeners.forEach(l => l(ev)); }
 
   stop()         { this._abortCtrl?.abort(); this.running = false; }
-  clearHistory() {
-    this._history = [];
-    this._loadedFolders.clear();
-    oogLogger.appendLine('[Agent] Історію очищено.');
-  }
+  clearHistory() { this._history = []; this._loadedFolders.clear(); oogLogger.appendLine('[Agent] Історію очищено.'); }
 
-  // ── ГОЛОВНИЙ МЕТОД ──────────────────────────────────────────────────────────
-  //
-  // Порядок:
-  //   КРОК 0: отримали task від користувача
-  //   КРОК 1: autoLoadSkillsForTask — аналіз задачі, підбір скілів
-  //   КРОК 2: emit('skills_loaded') — UI показує підібрані скіли
-  //   КРОК 3: buildSystemPrompt — формуємо промпт з скілами та контекстом
-  //   КРОК 4: history = [system, contextMessages, user:task]
-  //   КРОК 5+: цикл LLM → tool → result → history → наступний крок LLM
-  //   ФІНАЛ: LLM відповідає без <tool_call> → emit('answer')
-
-  async run(
-      task: string,
-      contextMessages: OllamaMessage[] = [],
-      workspaceContext = '',
-      language = 'Ukrainian',
-      workspaceRoot = '',
-      selectedSkillFolders: string[] = []
-  ) {
+  async run(task: string, contextMessages: OllamaMessage[] = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '', selectedSkillFolders: string[] = []) {
     this.running    = true;
     this._abortCtrl = new AbortController();
     const signal    = this._abortCtrl.signal;
-    const maxSteps  = vscode.workspace
-        .getConfiguration('openollamagravity')
-        .get<number>('maxAgentSteps', 25);
-
-    // Якщо workspaceRoot не передано явно — беремо з VSCode
-    const resolvedRoot = workspaceRoot
-        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-        || '';
-
-    // ── КРОК 1-2: підбір скілів ─────────────────────────────────────────────
-    // Виконуємо лише на початку нової сесії (history порожня).
-    // При продовженні діалогу скіли вже вбудовані в перший system-message.
+    const maxSteps  = vscode.workspace.getConfiguration('openollamagravity').get<number>('maxAgentSteps', 25);
+    const resolvedRoot = workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
     let loadedSkills: LoadedSkill[] = [];
 
@@ -252,225 +141,108 @@ export class AgentLoop {
 
       if (selectedSkillFolders.length > 0) {
         try {
-          const skillsPath = Tools.getSkillsPath();
-          const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0); // score 0 to get all requested
+          const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
           const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
           loadedSkills = Tools.loadTopSkills(toLoad, 10);
-        } catch (e: any) {
-          oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
-        }
+        } catch (e: any) { oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`); }
       }
-
-      /*
-      try {
-        loadedSkills = await Tools.autoLoadSkillsForTask(taskContext, workspaceContext, 3);
-      } catch (e: any) {
-        oogLogger.appendLine(`[Agent] Skills auto-load error: ${e.message}`);
-      }
-      */
 
       if (loadedSkills.length > 0) {
-        this.emit({
-          type:    'skills_loaded',
-          content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-          skills:  loadedSkills.map(s => ({
-            name:        s.name,
-            folderName:  s.folderName,
-            description: s.description,
-            score:       s.score,
-          })),
-        });
-        oogLogger.appendLine(
-            '[Agent] Скіли для задачі:\n' +
-            loadedSkills.map(s =>
-                `  • [${s.score}] ${s.folderName}  →  "${s.name}"`
-            ).join('\n')
-        );
-      } else {
-        oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
+        this.emit({ type: 'skills_loaded', content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`, skills: loadedSkills.map(s => ({ name: s.name, folderName: s.folderName, description: s.description, score: s.score })) });
       }
 
-      // КРОК 3: формуємо системний промпт з вбудованими скілами
       const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
       const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
-      oogLogger.appendLine(
-          `[Agent] System prompt: ${sysPrompt.length} chars` +
-          (loadedSkills.length > 0
-              ? `, включає ${loadedSkills.length} скіл(и)`
-              : ', без скілів')
-      );
-
-      // Запам'ятовуємо завантажені скіли для дедуплікації при динамічному пошуку
       loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
 
-      // КРОК 4: ініціалізуємо history
       this._history.push({ role: 'system', content: sysPrompt });
       if (contextMessages.length > 0) this._history.push(...contextMessages);
     }
 
-    // Повідомлення користувача — завжди додаємо
     this._history.push({ role: 'user', content: task });
 
-    // ── КРОКИ 5+: основний цикл ────────────────────────────────────────────
     for (let step = 1; step <= maxSteps; step++) {
       if (signal.aborted) break;
       this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
 
-      // Запит до LLM
       let output = '';
-      try {
-        output = await this._streamWithTimeout(step, maxSteps, signal);
-      } catch (err: any) {
-        this.emit({ type: 'error', content: err.message });
-        break;
-      }
+      try { output = await this._streamWithTimeout(step, maxSteps, signal); }
+      catch (err: any) { this.emit({ type: 'error', content: err.message }); break; }
 
-      oogLogger.appendLine(`[Agent] Step ${step} output (${output.length} chars)`);
-
-      // Парсимо відповідь: tool_call або фінальна відповідь
       const tool = parseToolCall(output);
 
       if (!tool) {
         const isBrokenTags = output.includes('<tool_call>');
-        const toolNames = [
-          'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
-          'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
-          'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill'
-        ];
-        
+        const toolNames = ['read_file', 'write_file', 'edit_file', 'list_files', 'search_files', 'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory', 'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill'];
         const forgottenTool = toolNames.find(tn => output.includes(tn));
-        
-        if (isBrokenTags || (forgottenTool && output.length < 500)) {
-          const reason = isBrokenTags 
-            ? `malformed <tool_call> structure` 
-            : `missing <tool_call> tags for ${forgottenTool}`;
 
+        if (isBrokenTags || (forgottenTool && output.length < 500)) {
+          const reason = isBrokenTags ? `malformed <tool_call> structure` : `missing <tool_call> tags for ${forgottenTool}`;
           this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
           this._history.push({ role: 'assistant', content: output });
-          this._history.push({ 
-             role: 'user', 
-             content: `ERROR: Your tool call is malformed or missing tags.\n` +
-                      `FIX: Every tool call MUST be: <tool_call><name>NAME</name><args>{...}</args></tool_call>\n` +
-                      `Double check that you use <name> and <args> inside <tool_call>.\n` +
-                      `Please retry with the correct XML format.`
+          this._history.push({
+            role: 'user',
+            content: `ERROR: Your tool call is malformed or missing tags.\nFIX: Every tool call MUST be: <tool_call><name>NAME</name><args>{...}</args></tool_call>\nPlease retry with the correct XML format.`
           });
-          continue; // retry
+          continue;
         }
 
-        // Немає <tool_call> і це не схоже на забутий тег → LLM завершив задачу
         this.emit({ type: 'answer', content: output });
         break;
       }
 
-      // Нарація — текст який агент написав ПЕРЕД <tool_call>
-      if (tool.narration) {
-        this.emit({ type: 'narration', content: tool.narration });
-      }
+      if (tool.narration) this.emit({ type: 'narration', content: tool.narration });
 
-      // Якщо args не вдалось розпарсити — повертаємо помилку агенту одразу,
-      // не викликаємо інструмент з порожніми args (це призводить до "вкажіть path")
       if (tool.parseError) {
-        this.emit({
-          type: 'tool_call', content: `Parse error: ${tool.name}`,
-          toolName: tool.name, toolArgs: {},
-        });
-        const errMsg =
-            `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
-            `Error: ${tool.parseError}\n\n` +
-            `REQUIRED FIX:\n` +
-            `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
-            `2. Escape all special chars in JSON strings\n` +
-            `3. Do NOT use single backslash \\ inside JSON strings\n` +
-            `Retry your tool call with correct JSON.`;
+        this.emit({ type: 'tool_call', content: `Parse error: ${tool.name}`, toolName: tool.name, toolArgs: {} });
+        const errMsg = `TOOL CALL FAILED — could not parse your <args> JSON.\nError: ${tool.parseError}\nRetry your tool call with correct JSON.`;
         this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
-        this._history.push({
-          role: 'user',
-          content:
-              `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
-              `<output>${errMsg}</output>\n</tool_result>`,
-        });
-        continue;  // даємо агенту шанс виправитись
+        this._history.push({ role: 'user', content: `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n<output>${errMsg}</output>\n</tool_result>` });
+        continue;
       }
 
-      // Є tool_call з валідними args → виконуємо інструмент
-      this.emit({
-        type: 'tool_call', content: `Calling: ${tool.name}`,
-        toolName: tool.name, toolArgs: tool.args,
-      });
+      this.emit({ type: 'tool_call', content: `Calling: ${tool.name}`, toolName: tool.name, toolArgs: tool.args });
 
       const res = await this._executeTool(tool.name, tool.args);
 
-      this.emit({
-        type: 'tool_result', content: res.output,
-        toolName: tool.name, ok: res.ok,
-      });
+      this.emit({ type: 'tool_result', content: res.output, toolName: tool.name, ok: res.ok });
 
-      // Зберігаємо у history повністю розгорнуті теги — LLM добре їх розуміє
+      // ОБРІЗАННЯ ВЕЛИКОГО ВИВОДУ ІНСТРУМЕНТІВ — рятує Ollama від переповнення пам'яті (EOF)
+      let historyOutput = res.output;
+      if (historyOutput.length > 8000) {
+        historyOutput = historyOutput.slice(0, 4000) +
+            `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
+            historyOutput.slice(-4000);
+      }
+
       this._history.push({ role: 'assistant', content: output });
       this._history.push({
         role: 'user',
-        content:
-            `<tool_result>\n` +
-            `<name>${tool.name}</name>\n` +
-            `<ok>${res.ok}</ok>\n` +
-            `<output>${res.output}</output>\n` +
-            `</tool_result>`,
+        content: `<tool_result>\n<name>${tool.name}</name>\n<ok>${res.ok}</ok>\n<output>${historyOutput}</output>\n</tool_result>`
       });
-
-      // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ (ВИМКНЕНО ДЛЯ ПРИСКОРЕННЯ) ──────────────────
-      // Аналізуємо вміст tool_result на сигнали: мова, фреймворк, технологія.
-      /*
-      if (res.ok) {
-        await this._discoverSkillsFromResult(tool.name, res.output);
-      }
-      */
     }
 
     this.running = false;
     this.emit({ type: 'done', content: '' });
   }
 
-  // ── STREAM З ТАЙМАУТОМ ────────────────────────────────────────────────────
-
-  private async _streamWithTimeout(
-      step: number,
-      total: number,
-      signal: AbortSignal
-  ): Promise<string> {
-    const ms = vscode.workspace
-        .getConfiguration('openollamagravity')
-        .get<number>('firstTokenTimeoutSec', 180) * 1000;
-
+  private async _streamWithTimeout(step: number, total: number, signal: AbortSignal): Promise<string> {
+    const ms = vscode.workspace.getConfiguration('openollamagravity').get<number>('firstTokenTimeoutSec', 180) * 1000;
     return new Promise((resolve, reject) => {
       let started = false;
       const timer = setTimeout(() => {
-        if (!started) {
-          reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
-        }
+        if (!started) reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
       }, ms);
-
-      this._ollama
-          .chatStream(
-              this._history,
-              chunk => {
-                started = true;
-                clearTimeout(timer);
-                this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
-              },
-              signal,
-              this.model
-          )
-          .then(resolve)
-          .catch(reject);
+      this._ollama.chatStream(this._history, chunk => {
+        started = true;
+        clearTimeout(timer);
+        this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
+      }, signal, this.model).then(resolve).catch(reject);
     });
   }
 
-  // ── ВИКОНАННЯ ІНСТРУМЕНТІВ ────────────────────────────────────────────────
-
   private async _executeTool(name: string, args: any): Promise<Tools.ToolResult> {
-    const confirm = async (msg: string) =>
-        (await vscode.window.showWarningMessage(`OOG: ${msg}`, 'Allow', 'Deny')) === 'Allow';
-
+    const confirm = async (msg: string) => (await vscode.window.showWarningMessage(`OOG: ${msg}`, 'Allow', 'Deny')) === 'Allow';
     switch (name) {
       case 'read_file':        return Tools.readFile(args);
       case 'write_file':       return Tools.writeFile(args, p => confirm(`Записати у ${p}`));
@@ -483,76 +255,10 @@ export class AgentLoop {
       case 'create_directory': return Tools.createDirectory(args);
       case 'delete_file':      return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`));
       case 'get_workspace_info': return Tools.getWorkspaceInfo(args);
-        // Fallback: агент сам запитує скіл якщо авто-підбір не вистачив
       case 'list_skills':      return Tools.listSkills();
       case 'read_skill':       return Tools.readSkill(args);
       case 'web_search':       return Tools.webSearch(args);
-      default:
-        return {
-          ok: false,
-          output:
-              `CRITICAL ERROR: Unknown tool "${name}". ` +
-              `Valid tools: read_file, write_file, edit_file, list_files, search_files, run_terminal, ` +
-              `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search. ` +
-              `Fix your <tool_call> and use an exact tool name from the list.`,
-        };
-    }
-  }
-  // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ ──────────────────────────────────────────────
-  //
-  // Жодних хардкодованих патернів.
-  // Вміст tool_result токенізується і напряму скорується проти frontmatter
-  // всіх незавантажених скілів — збіг по тегах/описі вирішує автоматично.
-
-  private async _discoverSkillsFromResult(
-      toolName: string,
-      resultContent: string,
-  ): Promise<void> {
-    try {
-      const { skills: newSkills, contextTokens } = await Tools.discoverSkillsFromContext(
-          toolName,
-          resultContent,
-          this._loadedFolders,
-          2,  // максимум нових скілів за раз
-          2,  // мінімальний score (запобігає шуму)
-      );
-
-      if (newSkills.length === 0) return;
-
-      // Реєструємо щоб не завантажувати повторно
-      newSkills.forEach(s => this._loadedFolders.add(s.folderName));
-
-      // Вставляємо в history одразу після tool_result.
-      // role:'user' з префіксом — Ollama не підтримує кілька system-messages.
-      const hint =
-          `[SYSTEM: Нові скіли знайдено з контексту (tokens: ${contextTokens.slice(0, 8).join(', ')})]\n\n` +
-          newSkills.map(s =>
-              `### SKILL: ${s.name}\n` +
-              `<!-- folder: ${s.folderName} | score: ${s.score} -->\n\n` +
-              s.content
-          ).join('\n\n---\n\n');
-
-      this._history.push({ role: 'user', content: hint });
-
-      // Повідомляємо UI
-      this.emit({
-        type:    'skills_discovered',
-        content: `Знайдено ${newSkills.length} скіл(и) з контексту`,
-        skills:  newSkills.map(s => ({
-          name:        s.name,
-          folderName:  s.folderName,
-          description: s.description,
-          score:       s.score,
-        })),
-        signals: contextTokens.slice(0, 10),
-      });
-
-      oogLogger.appendLine(
-          '[Agent] Динамічно з контексту:\n' +
-          newSkills.map(s => `  • [${s.score}] ${s.folderName} → "${s.name}"`).join('\n')
-      );
-    } catch (e: any) {
-      oogLogger.appendLine(`[Agent] Skills discovery error: ${e.message}`);
+      default: return { ok: false, output: `CRITICAL ERROR: Unknown tool "${name}".` };
     }
   }
 }

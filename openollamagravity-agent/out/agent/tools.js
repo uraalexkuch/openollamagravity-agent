@@ -644,42 +644,32 @@ async function webSearch(args) {
     const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
     client_1.oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode})`);
     try {
-        // Перевіряємо чи Perplexica запущена
-        const isAvailable = await checkPerplexica(baseUrl);
-        if (!isAvailable) {
-            return {
-                ok: false,
-                output: `Perplexica недоступна за адресою ${baseUrl}.\n` +
-                    `Щоб увімкнути web_search:\n` +
-                    `1. Запустіть Perplexica: https://github.com/ItzCrazyKns/Perplexica\n` +
-                    `2. Або змініть адресу: openollamagravity.perplexicaUrl у налаштуваннях VSCode.\n` +
-                    `Продовжую без web_search — використовую наявні знання.`,
-            };
-        }
         const body = JSON.stringify({
             query,
             focusMode,
         });
         const res = await httpPost(`${baseUrl}/api/search`, body);
         const data = JSON.parse(res);
-        if (!data.message && (!data.sources || data.sources.length === 0)) {
+        const sourcesArr = Array.isArray(data.sources) ? data.sources : [];
+        if (!data.message && !data.text && sourcesArr.length === 0) {
             return { ok: true, output: "No results found." };
         }
         let output = `Search Results for "${query}":\n\n`;
-        if (data.message) {
-            output += `Summary: ${data.message}\n\n`;
+        const summary = data.message || data.text;
+        if (summary) {
+            output += `Summary: ${summary}\n\n`;
         }
-        if (data.sources && data.sources.length > 0) {
+        if (sourcesArr.length > 0) {
             output += "Sources:\n";
-            const sources = data.sources.slice(0, maxResults);
-            sources.forEach((s, i) => {
+            const topSources = sourcesArr.slice(0, maxResults);
+            topSources.forEach((s, i) => {
                 const title = s.metadata?.title || s.title || 'Без назви';
                 const url = s.metadata?.url || s.url || '';
                 const snippet = (s.pageContent || s.snippet || '').slice(0, 300).replace(/\n+/g, ' ');
                 output += `[${i + 1}] ${title}\nURL: ${url}\n${snippet}\n\n`;
             });
         }
-        client_1.oogLogger.appendLine(`[WebSearch] Отримано ${data.sources?.length || 0} джерел для "${query}"`);
+        client_1.oogLogger.appendLine(`[WebSearch] Отримано ${sourcesArr.length} джерел для "${query}"`);
         return { ok: true, output: output.trim() };
     }
     catch (e) {
