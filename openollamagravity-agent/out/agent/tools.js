@@ -369,26 +369,18 @@ async function webSearch(args) {
     if (!query)
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
-    const focusMode = String(args?.focus || 'webSearch');
-    const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
-    client_1.oogLogger.appendLine(`[WebSearch] "${query}" focus=${focusMode}`);
+    client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
     return new Promise((promiseResolve) => {
         try {
             const url = new URL('/api/search', perplexicaUrl);
             const lib = url.protocol === 'https:' ? https : http;
-            const currentModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
-            const bodyData = JSON.stringify({
-                query,
-                focusMode,
-                optimizationMode: 'speed',
-                chatModel: { provider: 'ollama', model: currentModel },
-                embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' },
-                history: [],
-            });
+            const bodyData = JSON.stringify({ query, focusMode: 'webSearch' });
             const req = lib.request(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyData) },
-                timeout: 30000
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(bodyData),
+                },
             }, (res) => {
                 let buf = '';
                 res.on('data', (d) => { buf += d.toString(); });
@@ -399,18 +391,15 @@ async function webSearch(args) {
                     }
                     try {
                         const data = JSON.parse(buf);
-                        const sourcesArr = Array.isArray(data.sources) ? data.sources : [];
-                        if (!data.message && !data.text && sourcesArr.length === 0) {
+                        if (!data.message && (!data.sources || data.sources.length === 0)) {
                             promiseResolve({ ok: true, output: 'No results found.' });
                             return;
                         }
                         let output = `Search Results for "${query}":\n\n`;
-                        const summary = data.message || data.text;
-                        if (summary)
-                            output += `Summary: ${summary}\n\n`;
-                        if (sourcesArr.length > 0) {
+                        output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
+                        if (data.sources && data.sources.length > 0) {
                             output += 'Sources:\n';
-                            sourcesArr.slice(0, maxResults).forEach((s, i) => {
+                            data.sources.slice(0, 5).forEach((s, i) => {
                                 const title = s.metadata?.title || s.title || 'Без назви';
                                 const sUrl = s.metadata?.url || s.url || '';
                                 const snippet = (s.pageContent || s.snippet || '').slice(0, 300).replace(/\n+/g, ' ');
@@ -425,10 +414,9 @@ async function webSearch(args) {
                 });
             });
             req.on('error', (err) => {
-                client_1.oogLogger.appendLine(`[WebSearch] Connection error: ${err.message}`);
-                promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}. Perplexica запущена? (${perplexicaUrl})` });
+                client_1.oogLogger.appendLine(`[WebSearch] Error: ${err.message}`);
+                promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}. URL: ${perplexicaUrl}` });
             });
-            req.on('timeout', () => { req.destroy(); promiseResolve({ ok: false, output: 'Perplexica timeout (30s). Сервер доступний?' }); });
             req.write(bodyData);
             req.end();
         }
