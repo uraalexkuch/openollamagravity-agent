@@ -262,14 +262,13 @@ export async function discoverSkillsFromContext(toolName: string, content: strin
 }
 
 function getPerplexicaUrl(): string {
-  return vscode.workspace.getConfiguration('openollamagravity').get<string>('perplexicaUrl', '[http://10.1.0.138:3030](http://10.1.0.138:3030)');
+  return vscode.workspace.getConfiguration('openollamagravity').get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 
-/** 🌐 ОНОВЛЕНИЙ WEB SEARCH - Виправлено помилку "Missing sources or query" */
+/** 🌐 WEB SEARCH через Perplexica API */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
 
-  // Додано підтримку обробки вебсайту/домену, який генерує агент
   const website = args?.website || args?.domain;
   if (website) query += ` site:${website}`;
 
@@ -279,17 +278,17 @@ export async function webSearch(args: any): Promise<ToolResult> {
   const focusMode = String(args?.focus || 'webSearch');
   const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
 
-  oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode})`);
+  const currentModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model', 'llama3.1');
+
+  oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode}, model=${currentModel})`);
 
   try {
-    // Вказано обов'язкові поля для нових версій Perplexica API
     const body = JSON.stringify({
       query,
       focusMode,
-      sources: ['web'], // Обов'язкове поле
       optimizationMode: 'speed',
-      chatModel: { providerId: 'ollama', key: 'llama3.1' }, // Обов'язкове поле
-      embeddingModel: { providerId: 'ollama', key: 'nomic-embed-text' } // Обов'язкове поле
+      chatModel: { provider: 'ollama', model: currentModel },
+      embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' }
     });
 
     const res = await httpPost(`${baseUrl}/api/search`, body);
