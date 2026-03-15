@@ -357,7 +357,26 @@ class AgentLoop {
             // Парсимо відповідь: tool_call або фінальна відповідь
             const tool = parseToolCall(output);
             if (!tool) {
-                // Немає <tool_call> → LLM завершив задачу, повертаємо відповідь
+                // [Catch-and-Retry] Перевіряємо чи не забув агент XML теги для інструментів
+                const toolNames = [
+                    'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
+                    'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
+                    'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill'
+                ];
+                const forgottenTool = toolNames.find(tn => output.includes(tn));
+                if (forgottenTool && output.length < 500) { // Якщо відповідь коротка і містить назву інструменту
+                    this.emit({ type: 'narration', content: `⚠️ Виявлено команду без XML-тегів (${forgottenTool}). Прошу агента виправити формат...` });
+                    this._history.push({ role: 'assistant', content: output });
+                    this._history.push({
+                        role: 'user',
+                        content: `ERROR: You used the tool "${forgottenTool}" without <tool_call> tags.\n` +
+                            `FIX: Every tool call MUST be wrapped in: <tool_call><name>...</name><args>...</args></tool_call>\n` +
+                            `Example: <tool_call><name>${forgottenTool}</name><args>{"query": "..."}</args></tool_call>\n` +
+                            `Please retry with the correct XML format.`
+                    });
+                    continue; // Йдемо на наступну ітерацію (retry)
+                }
+                // Немає <tool_call> і це не схоже на забутий тег → LLM завершив задачу
                 this.emit({ type: 'answer', content: output });
                 break;
             }
