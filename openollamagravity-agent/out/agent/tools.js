@@ -363,9 +363,12 @@ function getPerplexicaUrl() {
 /** 🌐 WEB SEARCH через Perplexica */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
-    const website = args?.website || args?.domain;
-    if (website)
+    let website = args?.website || args?.domain;
+    if (website) {
+        // Strip http://, https://, and trailing slashes
+        website = String(website).replace(/^https?:\/\//i, '').split('/')[0];
         query += ` site:${website}`;
+    }
     if (!query)
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();

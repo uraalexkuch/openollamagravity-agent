@@ -268,8 +268,12 @@ function getPerplexicaUrl(): string {
 /** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
-  const website = args?.website || args?.domain;
-  if (website) query += ` site:${website}`;
+  let website = args?.website || args?.domain;
+  if (website) {
+    // Strip http://, https://, and trailing slashes
+    website = String(website).replace(/^https?:\/\//i, '').split('/')[0];
+    query += ` site:${website}`;
+  }
   if (!query) return { ok: false, output: 'web_search: вкажіть "query".' };
 
   const perplexicaUrl = getPerplexicaUrl();
