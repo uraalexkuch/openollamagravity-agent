@@ -40,6 +40,7 @@ exports.getActiveFileContent = getActiveFileContent;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const MAX_CONTEXT_BYTES = 20 * 1024; // 20 KB — запобігає мегабайтному контексту з мініфікованих файлів
 /** Gather compact workspace context: project type, key files, open file, selection */
 function gatherContext() {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -76,13 +77,19 @@ function gatherContext() {
     }
     return lines.join('\n');
 }
-/** Get currently open file content (capped at 200 lines) */
+/** Get currently open file content (capped at 200 lines AND 20KB) */
 function getActiveFileContent() {
     const editor = vscode.window.activeTextEditor;
     if (!editor)
         return '';
     const doc = editor.document;
     const content = doc.getText();
+    // Byte cap — захист від мініфікованих файлів
+    if (Buffer.byteLength(content, 'utf8') > MAX_CONTEXT_BYTES) {
+        const truncated = content.slice(0, MAX_CONTEXT_BYTES);
+        const lineCount = content.split('\n').length;
+        return `\`\`\`${doc.languageId}\n${truncated}\n…[truncated — file is ${lineCount} lines / ${Math.round(Buffer.byteLength(content, 'utf8') / 1024)}KB, showing first 20KB]\n\`\`\``;
+    }
     const lines = content.split('\n');
     const capped = lines.slice(0, 200);
     const suffix = lines.length > 200 ? `\n…(${lines.length - 200} more lines)` : '';

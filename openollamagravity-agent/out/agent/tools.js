@@ -688,9 +688,25 @@ function resolvePath(p) {
     return path.isAbsolute(p) ? p : path.join(root, p);
 }
 // ── FILE TOOLS ────────────────────────────────────────────────────────────────
+const READ_FILE_MAX_BYTES = 100 * 1024; // 100 KB — захист від переповнення контексту LLM
 async function readFile(args) {
     try {
-        return { ok: true, output: fs.readFileSync(resolvePath(args.path), 'utf8') };
+        const abs = resolvePath(args.path);
+        const stat = fs.statSync(abs);
+        if (stat.size > READ_FILE_MAX_BYTES) {
+            const fd = fs.openSync(abs, 'r');
+            const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
+            const n = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
+            fs.closeSync(fd);
+            const preview = buf.subarray(0, n).toString('utf8');
+            return {
+                ok: true,
+                output: preview +
+                    `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
+                    ` Use specific line ranges if you need more.]`,
+            };
+        }
+        return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     }
     catch (e) {
         return { ok: false, output: e.message };
@@ -711,6 +727,8 @@ async function writeFile(args, onConfirm) {
         return { ok: false, output: e.message };
     }
 }
+// Директорії, які пропускаємо при переліку — зазвичай велика кількість файлів без корисного сигналу
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '__pycache__', '.venv', 'venv', '.next', '.nuxt', 'coverage']);
 async function listFiles(args) {
     try {
         const base = resolvePath(args.path || '.');
@@ -729,10 +747,16 @@ async function listFiles(args) {
             catch {
                 return [];
             }
-            for (const e of entries.slice(0, 100)) {
+            for (const e of entries.slice(0, 150)) {
+                if (e.startsWith('.') && e !== '.env' && e !== '.gitignore')
+                    continue; // приховані файли крім важливих
                 const full = path.join(dir, e);
                 try {
                     const isDir = fs.statSync(full).isDirectory();
+                    if (isDir && SKIP_DIRS.has(e)) {
+                        out.push(`${pad}📁 ${e}/ [skipped — heavy directory]`);
+                        continue;
+                    }
                     out.push(`${pad}${isDir ? '📁' : '📄'} ${e}${isDir ? '/' : ''}`);
                     if (isDir && d < depth)
                         out.push(...walk(full, d + 1));
@@ -753,13 +777,22 @@ async function runTerminal(args, onConfirm) {
             return { ok: false, output: 'No command.' };
         if (!await onConfirm(args.command))
             return { ok: false, output: 'Rejected.' };
-        const res = cp.execSync(args.command, {
-            cwd: args.cwd
-                ? resolvePath(args.cwd)
-                : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''),
-            timeout: 60000,
+        const cwd = args.cwd
+            ? resolvePath(args.cwd)
+            : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '');
+        return new Promise((resolve) => {
+            cp.exec(args.command, { cwd, timeout: 60000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+                if (err) {
+                    // Деякі команди повертають ненульовий код але пишуть корисний stdout (npm test тощо)
+                    const out = (stdout || '') + (stderr ? `\n[stderr]:\n${stderr}` : '');
+                    resolve({ ok: false, output: out || err.message });
+                }
+                else {
+                    const out = stdout + (stderr ? `\n[stderr]:\n${stderr}` : '');
+                    resolve({ ok: true, output: out || '(no output)' });
+                }
+            });
         });
-        return { ok: true, output: res.toString() };
     }
     catch (e) {
         return { ok: false, output: e.message };

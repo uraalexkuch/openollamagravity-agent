@@ -230,15 +230,17 @@ async function refreshStatus(ollama) {
     const perplexicaUrl = vscode.workspace
         .getConfiguration('openollamagravity')
         .get('perplexicaUrl', 'http://localhost:3001');
+    // Спочатку показуємо базовий статус (до відповіді Perplexica)
+    statusBar.text = up ? `⚡ ${ollama.model}` : `⚡ Ollama offline`;
+    statusBar.show();
+    // Після отримання статусу Perplexica — оновлюємо один раз
     checkPerplexicaAvailable(perplexicaUrl).then(perplexicaUp => {
-        const webIcon = perplexicaUp ? '🌐' : '';
-        statusBar.text = up ? `⚡ ${ollama.model}${webIcon ? ' ' + webIcon : ''}` : `⚡ Ollama offline`;
+        const webIcon = perplexicaUp ? ' 🌐' : '';
+        statusBar.text = up ? `⚡ ${ollama.model}${webIcon}` : `⚡ Ollama offline`;
         if (statusBar.tooltip && perplexicaUp) {
             statusBar.tooltip += `\nPerplexica: ${perplexicaUrl}`;
         }
     });
-    statusBar.text = up ? `⚡ ${ollama.model}` : `⚡ Ollama offline`;
-    statusBar.show();
 }
 function checkPerplexicaAvailable(baseUrl) {
     return new Promise(resolve => {
