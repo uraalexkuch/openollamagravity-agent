@@ -12,7 +12,8 @@ export type AgentEventType =
     | 'error'
     | 'done'
     | 'step'
-    | 'skills_loaded';
+    | 'skills_loaded'     // початковий підбір скілів по задачі
+    | 'skills_discovered'; // динамічний пошук під час виконання
 
 export interface AgentEvent {
   type:        AgentEventType;
@@ -22,8 +23,10 @@ export interface AgentEvent {
   ok?:         boolean;
   step?:       number;
   totalSteps?: number;
-  /** Тільки для skills_loaded — список підібраних скілів для відображення в UI */
+  /** skills_loaded / skills_discovered — список скілів для UI */
   skills?:     Array<{ name: string; folderName: string; description: string; score: number }>;
+  /** skills_discovered — які сигнали спрацювали */
+  signals?:    string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,9 +146,11 @@ function parseToolCall(text: string): { name: string; args: any } | null {
 // ── AGENT LOOP ────────────────────────────────────────────────────────────────
 
 export class AgentLoop {
-  private _history:   OllamaMessage[] = [];
-  private _listeners: ((ev: AgentEvent) => void)[] = [];
-  private _abortCtrl?: AbortController;
+  private _history:        OllamaMessage[] = [];
+  private _listeners:      ((ev: AgentEvent) => void)[] = [];
+  private _abortCtrl?:     AbortController;
+  /** Множина folderName вже завантажених скілів — для дедуплікації при динамічному пошуку */
+  private _loadedFolders:  Set<string> = new Set();
   public running = false;
   public model?:  string;
 
@@ -156,7 +161,11 @@ export class AgentLoop {
   private emit(ev: AgentEvent)      { this._listeners.forEach(l => l(ev)); }
 
   stop()         { this._abortCtrl?.abort(); this.running = false; }
-  clearHistory() { this._history = []; oogLogger.appendLine('[Agent] Історію очищено.'); }
+  clearHistory() {
+    this._history = [];
+    this._loadedFolders.clear();
+    oogLogger.appendLine('[Agent] Історію очищено.');
+  }
 
   // ── ГОЛОВНИЙ МЕТОД ──────────────────────────────────────────────────────────
   //
@@ -232,6 +241,9 @@ export class AgentLoop {
               : ', без скілів')
       );
 
+      // Запам'ятовуємо завантажені скіли для дедуплікації при динамічному пошуку
+      loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
+
       // КРОК 4: ініціалізуємо history
       this._history.push({ role: 'system', content: sysPrompt });
       if (contextMessages.length > 0) this._history.push(...contextMessages);
@@ -289,6 +301,14 @@ export class AgentLoop {
             `<output>${res.output}</output>\n` +
             `</tool_result>`,
       });
+
+      // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ ─────────────────────────────────────────────
+      // Аналізуємо вміст tool_result на сигнали: мова, фреймворк, технологія.
+      // Нові знайдені скіли одразу вставляються в history — LLM використовує
+      // їх вже на наступному кроці, без зайвих list_skills / read_skill запитів.
+      if (res.ok) {
+        await this._discoverSkillsFromResult(tool.name, res.output);
+      }
     }
 
     this.running = false;
@@ -354,6 +374,63 @@ export class AgentLoop {
               `create_directory, list_skills, read_skill. ` +
               `Fix your <tool_call> and use an exact tool name from the list.`,
         };
+    }
+  }
+  // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ ──────────────────────────────────────────────
+  //
+  // Жодних хардкодованих патернів.
+  // Вміст tool_result токенізується і напряму скорується проти frontmatter
+  // всіх незавантажених скілів — збіг по тегах/описі вирішує автоматично.
+
+  private async _discoverSkillsFromResult(
+      toolName: string,
+      resultContent: string,
+  ): Promise<void> {
+    try {
+      const { skills: newSkills, contextTokens } = await Tools.discoverSkillsFromContext(
+          toolName,
+          resultContent,
+          this._loadedFolders,
+          2,  // максимум нових скілів за раз
+          2,  // мінімальний score (запобігає шуму)
+      );
+
+      if (newSkills.length === 0) return;
+
+      // Реєструємо щоб не завантажувати повторно
+      newSkills.forEach(s => this._loadedFolders.add(s.folderName));
+
+      // Вставляємо в history одразу після tool_result.
+      // role:'user' з префіксом — Ollama не підтримує кілька system-messages.
+      const hint =
+          `[SYSTEM: Нові скіли знайдено з контексту (tokens: ${contextTokens.slice(0, 8).join(', ')})]\n\n` +
+          newSkills.map(s =>
+              `### SKILL: ${s.name}\n` +
+              `<!-- folder: ${s.folderName} | score: ${s.score} -->\n\n` +
+              s.content
+          ).join('\n\n---\n\n');
+
+      this._history.push({ role: 'user', content: hint });
+
+      // Повідомляємо UI
+      this.emit({
+        type:    'skills_discovered',
+        content: `Знайдено ${newSkills.length} скіл(и) з контексту`,
+        skills:  newSkills.map(s => ({
+          name:        s.name,
+          folderName:  s.folderName,
+          description: s.description,
+          score:       s.score,
+        })),
+        signals: contextTokens.slice(0, 10),
+      });
+
+      oogLogger.appendLine(
+          '[Agent] Динамічно з контексту:\n' +
+          newSkills.map(s => `  • [${s.score}] ${s.folderName} → "${s.name}"`).join('\n')
+      );
+    } catch (e: any) {
+      oogLogger.appendLine(`[Agent] Skills discovery error: ${e.message}`);
     }
   }
 }

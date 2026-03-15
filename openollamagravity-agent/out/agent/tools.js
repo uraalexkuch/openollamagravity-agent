@@ -46,10 +46,59 @@ const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const cp = __importStar(require("child_process"));
-// ── FRONTMATTER ───────────────────────────────────────────────────────────────
+const client_1 = require("../ollama/client");
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function getSkillsPath() {
+    return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
+}
 /**
- * Зчитує перші 2 KB файлу і витягує YAML між першими "---".
- * Достатньо для ~30-50 токенів frontmatter за стандартом agentskills.io.
+ * Рекурсивно сканує всю папку skillsPath і знаходить кожен SKILL.md
+ * на будь-якій глибині вкладеності:
+ *
+ *   skills\10-andruia-skill-smith\SKILL.md           ← перший рівень
+ *   skills\cybersecurity\volatility3\SKILL.md        ← другий рівень
+ *   skills\web\xss\advanced\SKILL.md                 ← третій рівень тощо
+ *
+ * Також підтримує legacy .md файли (якщо SKILL.md не знайдено взагалі).
+ */
+function scanSkillFolders(skillsPath) {
+    const skillMd = [];
+    const legacyMd = [];
+    function walk(dir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(dir);
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry.startsWith('.'))
+                continue;
+            const full = path.join(dir, entry);
+            try {
+                const stat = fs.statSync(full);
+                if (stat.isDirectory()) {
+                    walk(full);
+                }
+                else if (entry === 'SKILL.md') {
+                    skillMd.push(full);
+                }
+                else if (entry.endsWith('.md')) {
+                    legacyMd.push(full);
+                }
+            }
+            catch { }
+        }
+    }
+    walk(skillsPath);
+    // Якщо є хоча б один SKILL.md — повертаємо лише їх (стандартна структура).
+    // Інакше падаємо на legacy .md (старі репо без agentskills.io структури).
+    return skillMd.length > 0 ? skillMd : legacyMd;
+}
+/**
+ * Зчитує перші 2 KB SKILL.md і витягує YAML між першими "---" ... "---".
+ * ~30-50 токенів — достатньо для визначення релевантності.
  */
 function readFrontmatter(filePath) {
     try {
@@ -67,7 +116,7 @@ function readFrontmatter(filePath) {
         return null;
     }
 }
-/** Парсить YAML рядки "key: value" і "key: [a, b, c]" */
+/** Мінімальний парсер YAML: "key: value" і "key: [a, b, c]" */
 function parseYaml(yaml) {
     const out = {};
     for (const line of yaml.split('\n')) {
@@ -88,176 +137,110 @@ function parseYaml(yaml) {
     }
     return out;
 }
-// ── FILE SCANNER ──────────────────────────────────────────────────────────────
-/** Рекурсивно знаходить усі SKILL.md або .md у skillsPath */
-function findAllSkillFiles(skillsPath) {
-    const results = [];
-    function walk(dir) {
-        let entries;
-        try {
-            entries = fs.readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const e of entries) {
-            if (e.startsWith('.'))
-                continue;
-            const full = path.join(dir, e);
-            try {
-                if (fs.statSync(full).isDirectory()) {
-                    walk(full);
-                }
-                else if (e === 'SKILL.md' || (results.length === 0 && e.endsWith('.md'))) {
-                    results.push(full);
-                }
-            }
-            catch { }
-        }
-    }
-    walk(skillsPath);
-    // Якщо немає SKILL.md — шукаємо всі .md (legacy репо без agentskills.io структури)
-    if (results.length === 0) {
-        function walkMd(dir) {
-            let entries;
-            try {
-                entries = fs.readdirSync(dir);
-            }
-            catch {
-                return;
-            }
-            for (const e of entries) {
-                if (e.startsWith('.'))
-                    continue;
-                const full = path.join(dir, e);
-                try {
-                    if (fs.statSync(full).isDirectory()) {
-                        walkMd(full);
-                    }
-                    else if (e.endsWith('.md')) {
-                        results.push(full);
-                    }
-                }
-                catch { }
-            }
-        }
-        walkMd(skillsPath);
-    }
-    return results;
-}
-function getSkillsPath() {
-    return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
-}
-// ── SCORING — відповідність задачі ───────────────────────────────────────────
-const STOP_WORDS = new Set([
-    'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'for', 'is', 'it',
-    'with', 'how', 'do', 'i', 'be', 'use', 'using', 'get', 'set', 'run', 'make',
-    'що', 'як', 'для', 'та', 'і', 'або', 'з', 'у', 'в', 'це', 'на', 'до', 'по',
+// ── SCORING ───────────────────────────────────────────────────────────────────
+const STOP = new Set([
+    'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'for', 'is', 'it', 'be',
+    'use', 'using', 'get', 'set', 'run', 'make', 'how', 'do', 'with',
+    'що', 'як', 'для', 'та', 'і', 'або', 'з', 'у', 'в', 'це', 'на', 'до', 'по', 'при',
 ]);
 function tokenize(text) {
     return text
         .toLowerCase()
-        .split(/[\s,;:.!?()\[\]{}<>\-_\/\\|"'`]+/)
-        .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+        .replace(/[-_]/g, ' ') // дефіси → пробіли (для "skill-smith" → "skill smith")
+        .split(/[\s,;:.!?()\[\]{}<>|"'`]+/)
+        .filter(w => w.length > 2 && !STOP.has(w));
 }
 /**
- * Обчислює score релевантності скіла до задачі.
- * Враховує: збіг тегів (×3), опис (×2), назву та домен (×1).
+ * Рахує score скіла відносно токенів задачі.
+ *   tags       → ×3  (найточніший сигнал)
+ *   description→ ×2
+ *   name/folder→ ×1
+ *   domain     → ×1
  */
 function scoreSkill(meta, taskTokens) {
     if (taskTokens.length === 0)
         return 0;
-    const nameTokens = tokenize(meta.name);
-    const descTokens = tokenize(meta.description);
-    const domainTokens = tokenize(`${meta.domain} ${meta.subdomain}`);
-    const tagTokens = meta.tags; // теги вже lowercase
+    const nameT = tokenize(meta.name + ' ' + meta.folderName);
+    const descT = tokenize(meta.description);
+    const domainT = tokenize(meta.domain + ' ' + meta.subdomain);
     let score = 0;
     for (const tw of taskTokens) {
-        if (tagTokens.some(t => t === tw || t.includes(tw) || tw.includes(t)))
+        if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))
             score += 3;
-        else if (descTokens.some(d => d === tw || d.includes(tw) || tw.includes(d)))
+        else if (descT.some(d => d === tw || d.includes(tw) || tw.includes(d)))
             score += 2;
-        else if (nameTokens.some(n => n === tw || n.includes(tw) || tw.includes(n)))
+        else if (nameT.some(n => n === tw || n.includes(tw) || tw.includes(n)))
             score += 1;
-        else if (domainTokens.some(d => d.includes(tw) || tw.includes(d)))
+        else if (domainT.some(d => d.length > 2 && (d.includes(tw) || tw.includes(d))))
             score += 1;
     }
     return score;
 }
-// ── PUBLIC API ────────────────────────────────────────────────────────────────
+// ── PUBLIC: автоматичний підбір скілів ────────────────────────────────────────
 /**
- * Аналізує задачу і повертає лише релевантні скіли з повним текстом.
+ * Викликається ПЕРЕД запуском агента.
+ * Аналізує задачу, читає frontmatter кожного скіла (~2 KB),
+ * повертає топ-N скілів з ПОВНИМ текстом.
  *
- * Виклик відбувається АВТОМАТИЧНО до запуску агента — не через tool_call.
- * Агент отримує готові скіли вже у системному промпті.
- *
- * @param task  текст задачі або промпту від користувача
- * @param maxSkills  максимальна кількість скілів (default: 3)
+ * @param task      текст задачі / промпт користувача
+ * @param maxSkills максимальна кількість скілів у промпті (default: 3)
  */
 async function autoLoadSkillsForTask(task, maxSkills = 3) {
     const skillsPath = getSkillsPath();
     if (!skillsPath || !fs.existsSync(skillsPath))
         return [];
-    const files = findAllSkillFiles(skillsPath);
+    const files = scanSkillFolders(skillsPath);
     if (files.length === 0)
         return [];
     const taskTokens = tokenize(task);
     const scored = [];
-    for (const file of files) {
-        const yaml = readFrontmatter(file);
-        // Для legacy .md без frontmatter — використовуємо ім'я файлу як назву
-        const meta = yaml
-            ? (() => {
-                const p = parseYaml(yaml);
-                return {
-                    filePath: file,
-                    skillPath: path.relative(skillsPath, path.dirname(file)).replace(/\\/g, '/'),
-                    name: String(p['name'] || path.basename(path.dirname(file))),
-                    description: String(p['description'] || ''),
-                    domain: String(p['domain'] || ''),
-                    subdomain: String(p['subdomain'] || ''),
-                    tags: Array.isArray(p['tags']) ? p['tags'] : [],
-                    score: 0,
-                };
-            })()
-            : {
-                filePath: file,
-                skillPath: path.relative(skillsPath, file).replace(/\\/g, '/'),
-                name: path.basename(file, '.md'),
-                description: '',
-                domain: '',
-                subdomain: '',
-                tags: tokenize(path.basename(file, '.md')), // теги з назви файлу
+    for (const filePath of files) {
+        // Для пласкої структури: "10-andruia-skill-smith"
+        // Для вкладеної:         "cybersecurity/volatility3"
+        const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+        const yaml = readFrontmatter(filePath);
+        let meta;
+        if (yaml) {
+            const p = parseYaml(yaml);
+            meta = {
+                filePath,
+                folderName,
+                name: String(p['name'] || folderName),
+                description: String(p['description'] || ''),
+                domain: String(p['domain'] || ''),
+                subdomain: String(p['subdomain'] || ''),
+                tags: Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
                 score: 0,
             };
+        }
+        else {
+            // SKILL.md без frontmatter — токенізуємо назву папки як теги
+            meta = {
+                filePath, folderName,
+                name: folderName, description: '', domain: '', subdomain: '',
+                tags: tokenize(folderName), score: 0,
+            };
+        }
         meta.score = scoreSkill(meta, taskTokens);
         if (meta.score > 0)
             scored.push(meta);
     }
-    // Сортуємо за score DESC, беремо топ N
+    // Сортуємо за score DESC
     scored.sort((a, b) => b.score - a.score);
     const top = scored.slice(0, maxSkills);
-    // Завантажуємо ПОВНИЙ текст лише обраних скілів
+    // Завантажуємо ПОВНИЙ текст лише обраних
     const loaded = [];
     for (const meta of top) {
         try {
             const content = fs.readFileSync(meta.filePath, 'utf8');
             loaded.push({ ...meta, content });
-            oogLogger_log(`[Skills] ✅ Завантажено: "${meta.name}" (score=${meta.score})`);
+            client_1.oogLogger.appendLine(`[Skills] ✅ ${meta.folderName} (score=${meta.score})`);
         }
         catch (e) {
-            oogLogger_log(`[Skills] ⚠️ Не вдалось прочитати: ${meta.filePath} — ${e.message}`);
+            client_1.oogLogger.appendLine(`[Skills] ⚠️  ${meta.folderName}: ${e.message}`);
         }
     }
     return loaded;
-}
-// Lazy reference до oogLogger щоб уникнути циклічного імпорту
-function oogLogger_log(msg) {
-    try {
-        const { oogLogger } = require('../ollama/client');
-        oogLogger.appendLine(msg);
-    }
-    catch { }
 }
 // ── PATH RESOLVER ─────────────────────────────────────────────────────────────
 function resolvePath(p) {
@@ -353,111 +336,82 @@ async function createDirectory(args) {
         return { ok: false, output: e.message };
     }
 }
-// ── SKILLS TOOLS (fallback — агент може викликати вручну) ────────────────────
+// ── SKILLS TOOLS (fallback — агент викликає вручну якщо потрібно) ─────────────
 /**
- * list_skills — повертає лише YAML frontmatter всіх скілів.
- * Агент використовує це як fallback, якщо авто-підбір не спрацював.
+ * list_skills — повертає YAML frontmatter всіх скілів.
+ * Агент використовує якщо потребує скіла поза авто-підбором.
+ *
+ * Формат кожного запису:
+ *   ---
+ *   name: ...
+ *   description: ...
+ *   tags: [...]
+ *   skill_path: 10-andruia-skill-smith
+ *   ---
  */
 async function listSkills() {
-    const p = getSkillsPath();
-    if (!p || !fs.existsSync(p)) {
+    const sp = getSkillsPath();
+    if (!sp || !fs.existsSync(sp)) {
         return { ok: false, output: 'Skills path not found. Check openollamagravity.skillsPath.' };
     }
-    const files = findAllSkillFiles(p);
+    const files = scanSkillFolders(sp);
     if (files.length === 0) {
-        return { ok: false, output: 'No skill files found. Run: openollamagravity.syncSkills' };
+        return { ok: false, output: 'No SKILL.md files found. Run: openollamagravity.syncSkills' };
     }
     const entries = [];
     for (const file of files) {
+        // Відносний шлях від skillsPath: "10-skill" або "cybersecurity/volatility3"
+        const folderName = path.relative(sp, path.dirname(file)).replace(/\\/g, '/');
         const yaml = readFrontmatter(file);
-        if (!yaml) {
-            // Legacy .md без frontmatter — показуємо просто ім'я
-            const rel = path.relative(p, file).replace(/\\/g, '/');
-            entries.push(`---\nname: ${path.basename(file, '.md')}\nskill_path: ${rel}\n---`);
-            continue;
-        }
-        const skillPath = path.relative(p, path.dirname(file)).replace(/\\/g, '/');
-        entries.push(`---\n${yaml}\nskill_path: ${skillPath}\n---`);
+        const body = yaml
+            ? `${yaml}\nskill_path: ${folderName}`
+            : `name: ${folderName}\nskill_path: ${folderName}`;
+        entries.push(`---\n${body}\n---`);
     }
     return {
         ok: true,
         output: `# SKILLS INDEX — ${entries.length} skills (frontmatter only)\n` +
-            `# To load full skill: read_skill {"name": "<skill_path>"}\n\n` +
+            `# Load full skill: read_skill {"name": "<skill_path>"}\n\n` +
             entries.join('\n\n'),
     };
 }
 /**
- * read_skill — завантажує ПОВНИЙ текст конкретного скіла.
- * args.name — skill_path з frontmatter або ім'я файлу.
+ * read_skill — завантажує ПОВНИЙ текст скіла.
+ * args.name = folderName, напр. "10-andruia-skill-smith"
  */
 async function readSkill(args) {
     if (!args.name)
-        return { ok: false, output: 'Вкажіть "name".' };
-    const p = getSkillsPath();
-    if (!p)
+        return { ok: false, output: 'Вкажіть "name" (назву папки скіла).' };
+    const sp = getSkillsPath();
+    if (!sp)
         return { ok: false, output: 'Skills path not configured.' };
-    const file = resolveSkillFile(p, args.name);
-    if (!file) {
+    // Пряме звернення — підтримує як "10-andruia-skill-smith" так і "cybersecurity/volatility3"
+    const directPath = path.join(sp, args.name, 'SKILL.md');
+    if (fs.existsSync(directPath)) {
+        try {
+            return { ok: true, output: fs.readFileSync(directPath, 'utf8') };
+        }
+        catch (e) {
+            return { ok: false, output: e.message };
+        }
+    }
+    // Fallback: шукаємо по всіх знайдених скілах — часткове співпадіння відносного шляху
+    const files = scanSkillFolders(sp);
+    const needle = String(args.name).toLowerCase().replace(/\\/g, '/');
+    const match = files.find(f => {
+        const rel = path.relative(sp, path.dirname(f)).replace(/\\/g, '/').toLowerCase();
+        return rel === needle || rel.includes(needle) || path.basename(rel).includes(needle);
+    });
+    if (!match) {
         return {
             ok: false,
-            output: `Skill not found: "${args.name}". Use list_skills to find skill_path values.`,
+            output: `Skill "${args.name}" not found. Use list_skills to see available skill_path values.`,
         };
     }
     try {
-        return { ok: true, output: fs.readFileSync(file, 'utf8') };
+        return { ok: true, output: fs.readFileSync(match, 'utf8') };
     }
     catch (e) {
         return { ok: false, output: e.message };
     }
-}
-function resolveSkillFile(skillsPath, name) {
-    const candidates = [
-        path.join(skillsPath, name),
-        path.join(skillsPath, name, 'SKILL.md'),
-        path.join(skillsPath, name.replace(/\/SKILL\.md$/i, ''), 'SKILL.md'),
-    ];
-    for (const c of candidates) {
-        try {
-            if (fs.statSync(c).isFile())
-                return c;
-        }
-        catch { }
-    }
-    const target = path.basename(name.replace(/\/SKILL\.md$/i, '').replace(/\.md$/i, ''));
-    return findByName(skillsPath, target);
-}
-function findByName(dir, target) {
-    let entries;
-    try {
-        entries = fs.readdirSync(dir);
-    }
-    catch {
-        return null;
-    }
-    for (const e of entries) {
-        if (e.startsWith('.'))
-            continue;
-        const full = path.join(dir, e);
-        try {
-            if (fs.statSync(full).isDirectory()) {
-                if (e === target) {
-                    const f = path.join(full, 'SKILL.md');
-                    try {
-                        if (fs.statSync(f).isFile())
-                            return f;
-                    }
-                    catch { }
-                }
-                const found = findByName(full, target);
-                if (found)
-                    return found;
-            }
-            else if (e.endsWith('.md') &&
-                (e === target + '.md' || path.basename(e, '.md') === target)) {
-                return full;
-            }
-        }
-        catch { }
-    }
-    return null;
 }
