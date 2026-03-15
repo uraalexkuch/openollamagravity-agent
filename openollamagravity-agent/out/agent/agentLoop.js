@@ -79,25 +79,23 @@ function buildSystemPrompt(language, skills, workspaceContext, workspacePath, wo
     return `You are an advanced autonomous coding and cybersecurity agent.
 You always explain what you are doing so the user understands your progress.
 
-OUTPUT FORMAT:
-- When you need to call a tool, write 1-2 sentences in ${language} explaining WHAT you found or plan to do, THEN the tool call.
-Example:
-  Починаю з огляду структури проекту, щоб зрозуміти архітектуру.
+OUTPUT FORMAT & TOOL CALLING:
+- You are an autonomous agent. You MUST continue calling tools until you have all the information needed to finish the task.
+- When you need to call a tool, write 1-2 sentences in ${language} explaining WHAT you found or plan to do, THEN the tool call wrapped in XML tags.
+- NEVER output tool names or JSON directly. ALWAYS wrap in <tool_call> tags.
+- CONTINUATION RULE: Do NOT provide a final answer until you have actually verified your changes or confirmed the required information. If you just called a tool, wait for the <tool_result> before concluding.
+
+Example of a CORRECT tool call:
+  Починаю з огляду структури проекту.
   <tool_call>
   <name>list_files</name>
-  <args>{"path": "D:\\\\web_project", "depth": 2}</args>
+  <args>{"path": "D:\\\\web_project"}</args>
   </tool_call>
 
-- When you have a final answer or completed the task, write it normally without a tool_call.
-
 NARRATION RULES:
-- Write 1-2 sentences BEFORE every tool call: what you found / what you plan / why
-- After reading a file → mention detected language or framework
-- After listing files → mention key files or directories you noticed
-- After writing a file → confirm what was created and its purpose
-- Keep it concise — one clear thought per step
-- NEVER output a <tool_call> without at least one narration sentence before it
-- For web_search: explain WHY you are searching and what you expect to find
+- Write 1-2 sentences BEFORE every tool call.
+- After reading a file → mention detected language or framework.
+- For web_search: explain WHY you are searching.
 
 AVAILABLE TOOLS:
 1. read_file(path, start_line?, end_line?)
@@ -457,7 +455,7 @@ class AgentLoop {
             case 'get_file_outline': return Tools.getFileOutline(args);
             case 'create_directory': return Tools.createDirectory(args);
             case 'delete_file': return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`));
-            case 'get_workspace_info': return Tools.getWorkspaceInfo();
+            case 'get_workspace_info': return Tools.getWorkspaceInfo(args);
             // Fallback: агент сам запитує скіл якщо авто-підбір не вистачив
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
