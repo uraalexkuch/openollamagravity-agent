@@ -266,6 +266,7 @@ function getPerplexicaUrl(): string {
 }
 
 /** 🌐 WEB SEARCH через Perplexica */
+/** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
   // Sanitize query: replace @, #, $ with spaces to prevent server-side 500 errors
@@ -286,10 +287,21 @@ export async function webSearch(args: any): Promise<ToolResult> {
     try {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
+
+      // ВИПРАВЛЕННЯ: Додано обов'язкові об'єкти моделей та історію
       const bodyData = JSON.stringify({
         query,
         focusMode: args.focusMode || 'webSearch',
-        sources: args.sources || ['web']
+        optimizationMode: 'speed',
+        history: [], // Perplexica часто очікує хоча б порожній масив історії
+        chatModel: {
+          provider: 'ollama',
+          model: 'gemma3n:latest' // Вкажіть тут модель, яка завантажена у вас в Ollama
+        },
+        embeddingModel: {
+          provider: 'ollama',
+          model: 'bge-m3:latest' // Вкажіть тут вашу embedding модель
+        }
       });
 
       const req = lib.request(url, {
