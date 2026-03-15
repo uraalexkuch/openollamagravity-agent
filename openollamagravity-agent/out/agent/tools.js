@@ -364,11 +364,10 @@ function getPerplexicaUrl() {
 /** 🌐 WEB SEARCH через Perplexica */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
-    // Sanitize query: replace @, #, $ with spaces to prevent server-side 500 errors
+    // Очищення запиту від спецсимволів
     query = query.replace(/[@#$]/g, ' ');
     let website = args?.website || args?.domain;
     if (website) {
-        // Strip http://, https://, and trailing slashes
         website = String(website).replace(/^https?:\/\//i, '').split('/')[0];
         query += ` site:${website}`;
     }
@@ -376,23 +375,25 @@ async function webSearch(args) {
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
     client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
+    // ДИНАМІЧНО отримуємо поточну модель (напр. gemma3n:latest)
+    const activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
     return new Promise((promiseResolve) => {
         try {
             const url = new URL('/api/search', perplexicaUrl);
             const lib = url.protocol === 'https:' ? https : http;
-            // ВИПРАВЛЕННЯ: Додано обов'язкові об'єкти моделей та історію
             const bodyData = JSON.stringify({
                 query,
                 focusMode: args.focusMode || 'webSearch',
+                sources: ['web'],
                 optimizationMode: 'speed',
-                history: [], // Perplexica часто очікує хоча б порожній масив історії
+                history: [],
                 chatModel: {
                     provider: 'ollama',
-                    model: 'gemma3n:latest' // Вкажіть тут модель, яка завантажена у вас в Ollama
+                    model: activeModel
                 },
                 embeddingModel: {
                     provider: 'ollama',
-                    model: 'bge-m3:latest' // Вкажіть тут вашу embedding модель
+                    model: 'bge-m3:latest' // <--- ВКАЗАНО ВАШУ EMBEDDING-МОДЕЛЬ
                 }
             });
             const req = lib.request(url, {
@@ -407,7 +408,10 @@ async function webSearch(args) {
                 res.on('end', () => {
                     if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
                         client_1.oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
-                        promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 500)}` });
+                        promiseResolve({
+                            ok: false,
+                            output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'bge-m3:latest' is pulled and SearxNG is running.`
+                        });
                         return;
                     }
                     try {
@@ -416,7 +420,7 @@ async function webSearch(args) {
                             promiseResolve({ ok: true, output: 'No results found.' });
                             return;
                         }
-                        let output = `Search Results for "${query}" (Mode: ${args.focusMode || 'webSearch'}):\n\n`;
+                        let output = `Search Results for "${query}":\n\n`;
                         output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
                         if (data.sources && data.sources.length > 0) {
                             output += 'Sources:\n';
