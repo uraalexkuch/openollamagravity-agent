@@ -24,6 +24,52 @@ export interface LoadedSkill extends SkillMeta {
   content: string;
 }
 
+// --- DEEP AGENTS: Task Planning Memory ---
+interface PlanItem {
+  id: number;
+  task: string;
+  status: 'open' | 'done';
+}
+
+let currentPlan: PlanItem[] = [];
+
+export async function managePlan(args: any): Promise<ToolResult> {
+  const { action, task, id } = args;
+
+  if (action === 'clear') {
+    currentPlan = [];
+    return { ok: true, output: 'Plan cleared.' };
+  }
+
+  if (action === 'create' && task) {
+    currentPlan.push({ id: currentPlan.length + 1, task, status: 'open' });
+    return { ok: true, output: `Task added.\n${formatPlan()}` };
+  }
+
+  if (action === 'complete' && id !== undefined) {
+    const t = currentPlan.find(p => p.id === Number(id));
+    if (t) {
+      t.status = 'done';
+      return { ok: true, output: `Task ${id} completed.\n${formatPlan()}` };
+    }
+    return { ok: false, output: `Task ID ${id} not found.` };
+  }
+
+  if (action === 'view') {
+    return { ok: true, output: formatPlan() };
+  }
+
+  return { ok: false, output: 'Invalid action. Use create, complete, view, or clear.' };
+}
+
+function formatPlan(): string {
+  if (currentPlan.length === 0) return 'The plan is empty. Use "create" to add tasks.';
+  return 'CURRENT PLAN:\n' + currentPlan.map(p =>
+      `[${p.status === 'done' ? 'X' : ' '}] ${p.id}. ${p.task}`
+  ).join('\n');
+}
+// -----------------------------------------
+
 export async function getAllSkills(): Promise<SkillMeta[]> {
   const skillsPath = getSkillsPath();
   if (!skillsPath || !fs.existsSync(skillsPath)) return [];
@@ -488,22 +534,46 @@ export async function discoverSkillsFromContext(
   return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
 
-export interface WebSearchResult {
-  title:   string;
-  url:     string;
-  snippet: string;
+// --- DEEP AGENTS: Auto-Skill Generation (Reflection) ---
+export async function saveSkill(
+    args: any,
+    onConfirm: (name: string, content: string) => Promise<boolean>
+): Promise<ToolResult> {
+  try {
+    const { name, description, content } = args;
+    if (!name || !content) return { ok: false, output: 'Missing "name" or "content".' };
+
+    const sp = getSkillsPath();
+    if (!sp || !fs.existsSync(sp)) return { ok: false, output: 'Skills path not configured or not found.' };
+
+    const folderName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    const skillDir = path.join(sp, folderName);
+
+    const fileContent = `---\nname: ${name}\ndescription: ${description || ''}\ntags: [auto-generated]\n---\n\n${content}`;
+
+    if (!await onConfirm(name, fileContent)) {
+      return { ok: false, output: 'User rejected saving the skill.' };
+    }
+
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), fileContent, 'utf8');
+
+    return { ok: true, output: `Skill "${name}" saved successfully to ${folderName}/SKILL.md in the knowledge base!` };
+  } catch (e: any) {
+    return { ok: false, output: `Failed to save skill: ${e.message}` };
+  }
 }
+// -------------------------------------------------------
 
 function getPerplexicaUrl(): string {
   return vscode.workspace
       .getConfiguration('openollamagravity')
-      .get<string>('perplexicaUrl', '[http://10.1.0.138:3030](http://10.1.0.138:3030)');
+      .get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 
 /** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
-  // Очищення запиту від спецсимволів
   query = query.replace(/[@#$]/g, ' ');
 
   let website = args?.website || args?.domain;
@@ -516,7 +586,6 @@ export async function webSearch(args: any): Promise<ToolResult> {
   const perplexicaUrl = getPerplexicaUrl();
   oogLogger.appendLine(`[WebSearch] "${query}"`);
 
-  // ДИНАМІЧНО отримуємо поточну модель
   const activeModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model', 'llama3.1');
 
   return new Promise((promiseResolve) => {
@@ -527,7 +596,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
       const bodyData = JSON.stringify({
         query,
         focusMode: args.focusMode || 'webSearch',
-        sources: ['web'], // Обов'язково
+        sources: ['web'],
         optimizationMode: 'speed',
         history: [],
         chatModel: {
@@ -813,7 +882,6 @@ export async function getFileOutline(args: any): Promise<ToolResult> {
     if (!args.path) return { ok: false, output: 'Missing path.' };
     const abs = resolvePath(args.path);
 
-    // Жорсткий захист від папок
     if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
       return {
         ok: false,
