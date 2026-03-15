@@ -50,20 +50,21 @@ CRITICAL: To call a tool, you MUST use exactly this XML format:
 If no arguments are needed, use: <args>{}</args>
 DO NOT write Python, Node.js, or any other code to call tools. ONLY use the XML <tool_call> format. Do not ask for permission, just call the tool.
 
-AVAILABLE TOOLS:
-1. list_files({"path": "...", "depth": 3})
-2. read_file({"path": "..."})
-3. write_file({"path": "...", "content": "..."})
-4. run_terminal({"command": "...", "cwd": "..."})
-5. create_directory({"path": "..."})
-6. list_skills({})
-7. read_skill({"name": "..."})
+AVAILABLE TOOLS (USE EXACT NAMES ONLY, DO NOT INVENT OR MISSPELL):
+- list_files({"path": "...", "depth": 3})
+- read_file({"path": "..."})
+- write_file({"path": "...", "content": "..."})
+- run_terminal({"command": "...", "cwd": "..."})
+- create_directory({"path": "..."})
+- list_skills({})
+- read_skill({"name": "..."})
 
 RULES:
 1. Reply in ${language}.
 2. For user projects, use absolute paths like "D:\\\\web_project\\\\...".
 3. YOUR SKILLS BASE is strictly located at: "${actualSkillsPath}".
-4. ALWAYS use list_skills({}) and read_skill({"name": "..."}) to access instructions. Do NOT invent alternative paths.
+4. ALWAYS use list_skills({}) and read_skill({"name": "..."}) to access instructions.
+5. CRITICAL ANTI-HALLUCINATION RULE: You can ONLY use the exact tool names listed above. Check your spelling carefully. Use "run_terminal", NEVER "run_termiinal" or "execute_command".
 `.trim();
 function parseToolCall(text) {
     const nameMatch = text.match(/<name>\s*([\w_]+)\s*<\/name>/i) || text.match(/"?name"?\s*:\s*"?([\w_]+)"?/i);
@@ -167,7 +168,12 @@ class AgentLoop {
             case 'create_directory': return Tools.createDirectory(args);
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
-            default: return { ok: false, output: `Tool ${name} not found.` };
+            default:
+                // Повертаємо детальну помилку, щоб агент міг виправити свій синтаксис
+                return {
+                    ok: false,
+                    output: `CRITICAL ERROR: Tool '${name}' does not exist! Stop inventing tool names. You MUST use EXACTLY one of the following: read_file, write_file, list_files, run_terminal, create_directory, list_skills, read_skill. Please correct your tool call.`
+                };
         }
     }
 }
