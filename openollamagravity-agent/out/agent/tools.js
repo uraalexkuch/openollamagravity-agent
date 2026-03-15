@@ -378,7 +378,8 @@ async function webSearch(args) {
                 query,
                 focusMode: 'webSearch',
                 optimizationMode: 'balanced',
-                history: []
+                history: [],
+                sources: ['web']
             });
             const req = lib.request(url, {
                 method: 'POST',
@@ -673,7 +674,12 @@ async function getFileOutline(args) {
     try {
         if (!args.path)
             return { ok: false, output: 'Missing path.' };
-        const uri = vscode.Uri.file(resolvePath(args.path));
+        const abs = resolvePath(args.path);
+        const stat = fs.statSync(abs);
+        if (stat.isDirectory()) {
+            return { ok: false, output: `Помилка: "${args.path}" є папкою. get_file_outline працює лише з файлами.` };
+        }
+        const uri = vscode.Uri.file(abs);
         const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
         if (!symbols || symbols.length === 0)
             return { ok: true, output: 'No Document Symbols found.' };

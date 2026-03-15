@@ -283,7 +283,8 @@ export async function webSearch(args: any): Promise<ToolResult> {
         query,
         focusMode: 'webSearch',
         optimizationMode: 'balanced',
-        history: []
+        history: [],
+        sources: ['web']
       });
 
       const req = lib.request(url, {
@@ -460,7 +461,10 @@ export async function editFile(args: any, onConfirm: (p: string, diff: string) =
   try {
     if (!args.path || args.start_line === undefined || args.end_line === undefined || args.new_content === undefined) return { ok: false, output: 'Missing arguments.' };
     const abs = resolvePath(args.path);
-    if (!fs.existsSync(abs)) return { ok: false, output: 'File not found.' };
+    const stat = fs.statSync(abs);
+    if (stat.isDirectory()) {
+      return { ok: false, output: `Помилка: "${args.path}" є папкою. edit_file працює лише з окремими файлами.` };
+    }
     const content = fs.readFileSync(abs, 'utf8'); const lines = content.split('\n');
     const start = Math.max(1, Number(args.start_line)) - 1; const end = Math.min(lines.length, Number(args.end_line));
     const diff = `--- OLD\n+++ NEW\n-${lines.slice(start, end).join('\n')}\n+${args.new_content}`;
@@ -536,7 +540,12 @@ export async function getDiagnostics(args: any): Promise<ToolResult> {
 export async function getFileOutline(args: any): Promise<ToolResult> {
   try {
     if (!args.path) return { ok: false, output: 'Missing path.' };
-    const uri = vscode.Uri.file(resolvePath(args.path));
+    const abs = resolvePath(args.path);
+    const stat = fs.statSync(abs);
+    if (stat.isDirectory()) {
+      return { ok: false, output: `Помилка: "${args.path}" є папкою. get_file_outline працює лише з файлами.` };
+    }
+    const uri = vscode.Uri.file(abs);
     const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>('vscode.executeDocumentSymbolProvider', uri);
     if (!symbols || symbols.length === 0) return { ok: true, output: 'No Document Symbols found.' };
     const lines: string[] = [];
