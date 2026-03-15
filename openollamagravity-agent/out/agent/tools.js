@@ -376,10 +376,8 @@ async function webSearch(args) {
             const lib = url.protocol === 'https:' ? https : http;
             const bodyData = JSON.stringify({
                 query,
-                focusMode: 'webSearch',
-                optimizationMode: 'balanced',
-                history: [],
-                sources: ['web']
+                focusMode: args.focusMode || 'webSearch',
+                sources: args.sources || ['web']
             });
             const req = lib.request(url, {
                 method: 'POST',
@@ -392,7 +390,8 @@ async function webSearch(args) {
                 res.on('data', (d) => { buf += d.toString(); });
                 res.on('end', () => {
                     if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-                        promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 300)}` });
+                        client_1.oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
+                        promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 500)}` });
                         return;
                     }
                     try {
@@ -401,7 +400,7 @@ async function webSearch(args) {
                             promiseResolve({ ok: true, output: 'No results found.' });
                             return;
                         }
-                        let output = `Search Results for "${query}":\n\n`;
+                        let output = `Search Results for "${query}" (Mode: ${args.focusMode || 'webSearch'}):\n\n`;
                         output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
                         if (data.sources && data.sources.length > 0) {
                             output += 'Sources:\n';
@@ -591,8 +590,10 @@ async function editFile(args, onConfirm) {
         if (!args.path || args.start_line === undefined || args.end_line === undefined || args.new_content === undefined)
             return { ok: false, output: 'Missing arguments.' };
         const abs = resolvePath(args.path);
-        if (!fs.existsSync(abs))
-            return { ok: false, output: 'File not found.' };
+        const stat = fs.statSync(abs);
+        if (stat.isDirectory()) {
+            return { ok: false, output: `Помилка: "${args.path}" є папкою. edit_file працює лише з окремими файлами.` };
+        }
         const content = fs.readFileSync(abs, 'utf8');
         const lines = content.split('\n');
         const start = Math.max(1, Number(args.start_line)) - 1;

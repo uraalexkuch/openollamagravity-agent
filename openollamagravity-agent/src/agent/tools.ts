@@ -281,10 +281,8 @@ export async function webSearch(args: any): Promise<ToolResult> {
       const lib      = url.protocol === 'https:' ? https : http;
       const bodyData = JSON.stringify({
         query,
-        focusMode: 'webSearch',
-        optimizationMode: 'balanced',
-        history: [],
-        sources: ['web']
+        focusMode: args.focusMode || 'webSearch',
+        sources: args.sources || ['web']
       });
 
       const req = lib.request(url, {
@@ -298,7 +296,8 @@ export async function webSearch(args: any): Promise<ToolResult> {
         res.on('data', (d: Buffer) => { buf += d.toString(); });
         res.on('end', () => {
           if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-            promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 300)}` });
+            oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
+            promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 500)}` });
             return;
           }
           try {
@@ -307,7 +306,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
               promiseResolve({ ok: true, output: 'No results found.' });
               return;
             }
-            let output = `Search Results for "${query}":\n\n`;
+            let output = `Search Results for "${query}" (Mode: ${args.focusMode || 'webSearch'}):\n\n`;
             output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
             if (data.sources && data.sources.length > 0) {
               output += 'Sources:\n';
