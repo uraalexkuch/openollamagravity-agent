@@ -265,63 +265,76 @@ function getPerplexicaUrl(): string {
   return vscode.workspace.getConfiguration('openollamagravity').get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 
-/** 🌐 WEB SEARCH через Perplexica API */
+/** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
-
   const website = args?.website || args?.domain;
   if (website) query += ` site:${website}`;
-
   if (!query) return { ok: false, output: 'web_search: вкажіть "query".' };
 
-  const baseUrl = getPerplexicaUrl().replace(/\/$/, '');
-  const focusMode = String(args?.focus || 'webSearch');
-  const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
+  const perplexicaUrl = getPerplexicaUrl();
+  const focusMode    = String(args?.focus || 'webSearch');
+  const maxResults   = Math.min(Number(args?.maxResults) || 5, 10);
 
-  const currentModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model', 'llama3.1');
+  oogLogger.appendLine(`[WebSearch] "${query}" focus=${focusMode}`);
 
-  oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode}, model=${currentModel})`);
+  return new Promise((promiseResolve) => {
+    try {
+      const url      = new URL('/api/search', perplexicaUrl);
+      const lib      = url.protocol === 'https:' ? https : http;
+      const bodyData = JSON.stringify({ query, focusMode });
 
-  try {
-    // Спробуємо новий API (providerId/key + sources) та старий (provider/model) через fallback
-    const body = JSON.stringify({
-      query,
-      focusMode,
-      optimizationMode: 'speed',
-      sources: ['web'],                                         // обов'язкове поле у нових версіях Perplexica
-      chatModel: { provider: 'ollama', model: currentModel },  // формат для Perplexica ≤ legacy
-      embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' }
-    });
-
-    const res = await httpPost(`${baseUrl}/api/search`, body);
-    const data = JSON.parse(res) as any;
-    const sourcesArr = Array.isArray(data.sources) ? data.sources : [];
-
-    if (!data.message && !data.text && sourcesArr.length === 0) {
-      return { ok: true, output: "No results found." };
-    }
-
-    let output = `Search Results for "${query}":\n\n`;
-    const summary = data.message || data.text;
-    if (summary) output += `Summary: ${summary}\n\n`;
-
-    if (sourcesArr.length > 0) {
-      output += "Sources:\n";
-      const topSources = sourcesArr.slice(0, maxResults);
-      topSources.forEach((s: any, i: number) => {
-        const title = s.metadata?.title || s.title || 'Без назви';
-        const url = s.metadata?.url || s.url || '';
-        const snippet = (s.pageContent || s.snippet || '').slice(0, 300).replace(/\n+/g, ' ');
-        output += `[${i + 1}] ${title}\nURL: ${url}\n${snippet}\n\n`;
+      const req = lib.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyData) },
+        timeout: 30_000
+      }, (res: any) => {
+        let buf = '';
+        res.on('data', (d: Buffer) => { buf += d.toString(); });
+        res.on('end', () => {
+          if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+            promiseResolve({ ok: false, output: `Search failed: HTTP ${res.statusCode}\n${buf.slice(0, 300)}` });
+            return;
+          }
+          try {
+            const data = JSON.parse(buf) as any;
+            const sourcesArr = Array.isArray(data.sources) ? data.sources : [];
+            if (!data.message && !data.text && sourcesArr.length === 0) {
+              promiseResolve({ ok: true, output: 'No results found.' });
+              return;
+            }
+            let output = `Search Results for "${query}":\n\n`;
+            const summary = data.message || data.text;
+            if (summary) output += `Summary: ${summary}\n\n`;
+            if (sourcesArr.length > 0) {
+              output += 'Sources:\n';
+              sourcesArr.slice(0, maxResults).forEach((s: any, i: number) => {
+                const title   = s.metadata?.title || s.title || 'Без назви';
+                const sUrl    = s.metadata?.url   || s.url   || '';
+                const snippet = (s.pageContent || s.snippet || '').slice(0, 300).replace(/\n+/g, ' ');
+                output += `[${i + 1}] ${title}\nURL: ${sUrl}\n${snippet}\n\n`;
+              });
+            }
+            promiseResolve({ ok: true, output: output.slice(0, 4000).trim() });
+          } catch (e: any) {
+            promiseResolve({ ok: false, output: `Failed to parse response: ${e.message}\nRaw: ${buf.slice(0, 300)}` });
+          }
+        });
       });
-    }
 
-    return { ok: true, output: output.trim() };
-  } catch (e: any) {
-    oogLogger.appendLine(`[WebSearch] Помилка: ${e.message}`);
-    return { ok: false, output: `web_search помилка: ${e.message}. Perplexica запущена? (${baseUrl})` };
-  }
+      req.on('error', (err: Error) => {
+        oogLogger.appendLine(`[WebSearch] Connection error: ${err.message}`);
+        promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}. Perplexica запущена? (${perplexicaUrl})` });
+      });
+      req.on('timeout', () => { req.destroy(); promiseResolve({ ok: false, output: 'Perplexica timeout (30s). Сервер доступний?' }); });
+      req.write(bodyData);
+      req.end();
+    } catch (err: any) {
+      promiseResolve({ ok: false, output: `Error: ${err.message}` });
+    }
+  });
 }
+
 
 async function checkPerplexica(baseUrl: string): Promise<boolean> {
   return new Promise(resolve => {
