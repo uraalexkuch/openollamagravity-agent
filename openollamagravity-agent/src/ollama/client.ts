@@ -20,23 +20,49 @@ export class OllamaClient {
   /** Оптимізує вікно контексту під конкретну модель на основі її максимальних можливостей */
   private getDynamicContext(model: string): number {
     const m = model.toLowerCase();
+
     const limit = this.cfg<number>('maxDynamicContext', 262144);
 
-    if (m.includes('qwen3')) return Math.min(262144, limit);
-    if (m.includes('llama3.1') || m.includes('llama3.2') || m.includes('llama3.3') ||
-        (m.includes('gemma3') && !m.includes('1b')) || m.includes('mistral-large') ||
-        m.includes('phi3') || m.includes('command-r') || m.includes('qwen2.5') ||
-        m.includes('qwen2-vl') || m.includes('deepseek-r1') || m.includes('qwq') ||
-        m.includes('deepseek-coder-v2') || m.includes('devstral')) {
+    if (m.includes('qwen3')) {
+      return Math.min(262144, limit);
+    }
+
+    if (
+        m.includes('llama3.1') || m.includes('llama3.2') || m.includes('llama3.3') ||
+        (m.includes('gemma3') && !m.includes('1b')) ||
+        m.includes('mistral-large') ||
+        m.includes('phi3') ||
+        m.includes('command-r') ||
+        m.includes('qwen2.5') || m.includes('qwen2-vl') ||
+        m.includes('deepseek-r1') || m.includes('qwq') || m.includes('deepseek-coder-v2') ||
+        m.includes('devstral')
+    ) {
       return Math.min(131072, limit);
     }
-    if (m.includes('codellama')) return Math.min(102400, limit);
-    if (m.includes('mixtral')) return Math.min(65536, limit);
-    if (m.includes('mistral') || (m.includes('gemma3') && m.includes('1b'))) return Math.min(32768, limit);
-    if (m.includes('phi4') || m.includes('starcoder2')) return Math.min(16384, limit);
-    if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) return Math.min(8192, limit);
+
+    if (m.includes('codellama')) {
+      return Math.min(102400, limit);
+    }
+
+    if (m.includes('mixtral')) {
+      return Math.min(65536, limit);
+    }
+
+    if (m.includes('mistral') || (m.includes('gemma3') && m.includes('1b'))) {
+      return Math.min(32768, limit);
+    }
+
+    if (m.includes('phi4') || m.includes('starcoder2')) {
+      return Math.min(16384, limit);
+    }
+
+    if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) {
+      return Math.min(8192, limit);
+    }
+
     if (m.includes('moondream')) return Math.min(2048, limit);
     if (m.includes('llava')) return Math.min(4096, limit);
+
     if (m.includes('mxbai')) return Math.min(512, limit);
 
     return Math.min(4096, limit);
@@ -120,7 +146,7 @@ export class OllamaClient {
     });
   }
 
-  /** Генерація для inlineCompletion та простих запитів (тепер підтримує signal) */
+  /** Генерація для inlineCompletion та простих запитів (підтримує signal) */
   async generate(prompt: string, maxTokens = 256, modelOverride?: string, signal?: AbortSignal): Promise<string> {
     const targetModel = modelOverride || this.model;
     const ctx = this.getDynamicContext(targetModel);
@@ -140,9 +166,12 @@ export class OllamaClient {
       const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
       const lib = url.protocol === 'https:' ? https : http;
       const defaultPort = url.protocol === 'https:' ? 443 : 11434;
-      lib.get({ hostname: url.hostname, port: url.port || defaultPort, path: p }, r => {
-        let d = ''; r.on('data', (c: Buffer) => d += c.toString()); r.on('end', () => res(d));
-      }).on('error', rej);
+      const options = {
+        hostname: url.hostname,
+        port: url.port || defaultPort,
+        path: p,
+      };
+      lib.get(options, r => { let d = ''; r.on('data', (c: Buffer) => d += c.toString()); r.on('end', () => res(d)); }).on('error', rej);
     });
   }
 
@@ -163,6 +192,7 @@ export class OllamaClient {
       req.on('error', rej);
       // Прив'язка скасування HTTP запиту до AbortController
       signal?.addEventListener('abort', () => { req.destroy(); rej(new Error('Aborted')); });
+
       req.write(b); req.end();
     });
   }

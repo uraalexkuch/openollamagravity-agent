@@ -8,7 +8,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private _debounceResolve: (() => void) | undefined;
   private _reqId = 0;
-  private _abortController: AbortController | undefined; // Контролер для скасування HTTP запиту
+  private _abortController: AbortController | undefined;
 
   constructor(private readonly ollama: OllamaClient) {}
 
@@ -21,7 +21,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     const cfg = vscode.workspace.getConfiguration('openollamagravity');
     if (!cfg.get<boolean>('inlineCompletionEnabled', true)) return;
 
-    // ── Скасування попереднього запиту на рівні HTTP та Таймера ──
+    // ── Скасування попереднього запиту ──
     if (this._abortController) {
       this._abortController.abort();
     }
@@ -53,19 +53,25 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     if (!currentLineTrimmed) return;
 
     const startLine = Math.max(0, position.line - 50);
-    const prefix    = document.getText(new vscode.Range(new vscode.Position(startLine, 0), position));
-    const endLine   = Math.min(document.lineCount - 1, position.line + 10);
-    const suffix    = document.getText(new vscode.Range(position, new vscode.Position(endLine, document.lineAt(endLine).text.length)));
+    const prefix    = document.getText(
+        new vscode.Range(new vscode.Position(startLine, 0), position)
+    );
+
+    const endLine = Math.min(document.lineCount - 1, position.line + 10);
+    const suffix  = document.getText(
+        new vscode.Range(position, new vscode.Position(endLine, document.lineAt(endLine).text.length))
+    );
 
     const id = ++this._reqId;
-    const prompt = buildPrompt(document.languageId, prefix, suffix);
+
+    const prompt    = buildPrompt(document.languageId, prefix, suffix);
     const maxTokens = cfg.get<number>('maxTokens', 4096);
 
-    // Створюємо новий контролер та підв'язуємо до скасування від VS Code
+    // Створюємо новий контролер та підв'язуємо скасування від VS Code
     this._abortController = new AbortController();
     token.onCancellationRequested(() => this._abortController?.abort());
 
-    // Передаємо signal в generate для можливості миттєвого обриву генерації
+    // Передаємо signal в generate
     const suggestion = await this.ollama
         .generate(prompt, Math.min(maxTokens, 256), undefined, this._abortController.signal)
         .catch(() => '');
@@ -77,20 +83,37 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
 
     return {
       items: [
-        new vscode.InlineCompletionItem(trimmed, new vscode.Range(position, position)),
+        new vscode.InlineCompletionItem(
+            trimmed,
+            new vscode.Range(position, position)
+        ),
       ],
     };
   }
 }
 
 function buildPrompt(lang: string, prefix: string, suffix: string): string {
-  return `<|fim_prefix|>// Language: ${lang}\n${prefix}<|fim_suffix|>${suffix}<|fim_middle|>`;
+  return (
+      `<|fim_prefix|>` +
+      `// Language: ${lang}\n` +
+      prefix +
+      `<|fim_suffix|>` +
+      suffix +
+      `<|fim_middle|>`
+  );
 }
 
 function cleanSuggestion(raw: string, prefix: string): string {
-  let s = raw.replace(/<\|fim_prefix\|>/g, '').replace(/<\|fim_suffix\|>/g, '')
-      .replace(/<\|fim_middle\|>/g, '').replace(/<\|endoftext\|>/g, '');
-  if (s.startsWith(prefix)) s = s.slice(prefix.length);
+  let s = raw;
+  s = s
+      .replace(/<\|fim_prefix\|>/g, '')
+      .replace(/<\|fim_suffix\|>/g, '')
+      .replace(/<\|fim_middle\|>/g, '')
+      .replace(/<\|endoftext\|>/g, '');
+
+  if (s.startsWith(prefix)) {
+    s = s.slice(prefix.length);
+  }
 
   const prefixLines = prefix.split('\n');
   const lastPrefixLine = prefixLines[prefixLines.length - 1];
@@ -98,7 +121,10 @@ function cleanSuggestion(raw: string, prefix: string): string {
     const firstNewline = s.indexOf('\n');
     const firstLine    = s.substring(0, firstNewline).trim();
     const opensBlock   = firstLine.endsWith('{') || firstLine.endsWith('(') || firstLine.endsWith('[') || firstLine.endsWith(':');
-    if (!opensBlock) s = s.substring(0, firstNewline);
+    if (!opensBlock) {
+      s = s.substring(0, firstNewline);
+    }
   }
+
   return s.trimEnd();
 }
