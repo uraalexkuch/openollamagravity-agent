@@ -137,6 +137,20 @@ class OllamaClient {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             }, res => {
+                if (res.statusCode && res.statusCode >= 400) {
+                    let errBuf = '';
+                    res.on('data', d => errBuf += d.toString());
+                    res.on('end', () => {
+                        try {
+                            const j = JSON.parse(errBuf);
+                            reject(new Error(`Ollama API Error (${res.statusCode}): ${j.error || errBuf}`));
+                        }
+                        catch {
+                            reject(new Error(`Ollama API HTTP ${res.statusCode}: ${errBuf}`));
+                        }
+                    });
+                    return;
+                }
                 let buf = '';
                 res.on('data', (chunk) => {
                     if (signal?.aborted) {
@@ -149,6 +163,10 @@ class OllamaClient {
                     for (const line of lines) {
                         try {
                             const j = JSON.parse(line);
+                            if (j.error) {
+                                reject(new Error(`Ollama Error: ${j.error}`));
+                                return;
+                            }
                             if (j.message?.content) {
                                 full += j.message.content;
                                 onChunk(j.message.content);

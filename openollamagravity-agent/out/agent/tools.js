@@ -565,11 +565,54 @@ async function autoLoadSkillsForTask(task, workspaceContext = '', maxSkills = 3)
  */
 async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNew = 2, minScore = 3) {
     const empty = { skills: [], contextTokens: [] };
-    if (!['read_file', 'list_files', 'run_terminal'].includes(toolName))
+    const validTools = ['read_file', 'list_files', 'run_terminal', 'search_files', 'get_diagnostics', 'get_file_outline'];
+    if (!validTools.includes(toolName))
         return empty;
     if (!content || content.length < 20)
         return empty;
-    const contextTokens = extractQueryTokens(content);
+    // Вилучаємо базові токени з тексту
+    let contextTokens = extractQueryTokens(content);
+    // Аналізуємо розширення файлів для виявлення мови
+    const exts = new Set();
+    const extRegex = /\.([a-zA-Z0-9]+)\b/g;
+    let match;
+    while ((match = extRegex.exec(content)) !== null) {
+        exts.add(match[1].toLowerCase());
+    }
+    // Маппінг розширень у ключові слова мов програмування
+    const extToLang = {
+        'ts': ['typescript', 'node', 'react', 'frontend', 'javascript'],
+        'js': ['javascript', 'node', 'react', 'frontend'],
+        'jsx': ['react', 'javascript', 'frontend'],
+        'tsx': ['react', 'typescript', 'frontend'],
+        'py': ['python', 'django', 'fastapi', 'flask'],
+        'go': ['golang', 'go'],
+        'rs': ['rust', 'cargo'],
+        'java': ['java', 'spring'],
+        'cs': ['csharp', 'dotnet'],
+        'cpp': ['cpp', 'cplusplus'],
+        'c': ['c'],
+        'php': ['php', 'laravel'],
+        'rb': ['ruby', 'rails'],
+        'swift': ['swift', 'ios'],
+        'kt': ['kotlin', 'android'],
+        'html': ['html', 'frontend'],
+        'css': ['css', 'frontend', 'tailwind'],
+        'scss': ['css', 'frontend', 'tailwind'],
+        'sql': ['sql', 'database', 'postgres', 'mysql'],
+        'sh': ['bash', 'shell'],
+        'yaml': ['yaml', 'docker', 'kubernetes', 'ci'],
+        'yml': ['yaml', 'docker', 'kubernetes', 'ci'],
+        'json': ['json']
+    };
+    const extraTokens = [];
+    for (const ext of exts) {
+        if (extToLang[ext]) {
+            extraTokens.push(...extToLang[ext]);
+        }
+    }
+    // Об'єднуємо токени, щоб підсилити пошук за мовою
+    contextTokens = [...new Set([...contextTokens, ...extraTokens])];
     if (contextTokens.length < 3)
         return empty;
     client_1.oogLogger.appendLine(`[Skills] Контекст з ${toolName}: tokens=[${contextTokens.slice(0, 10).join(', ')}]`);

@@ -196,7 +196,7 @@
         },
         "openollamagravity.firstTokenTimeoutSec": {
           "type": "number",
-          "default": 180,
+          "default": 300,
           "description": "Таймаут (секунди) очікування першого токена від Ollama. Якщо модель не відповіла за цей час — задача перривається. Збільшіть для повільних GPU або великих моделей."
         }
       }
