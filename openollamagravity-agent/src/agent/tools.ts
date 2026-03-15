@@ -217,24 +217,173 @@ function tokenize(text: string): string[] {
       .filter(w => w.length > 2 && !STOP.has(w));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ЄДИНИЙ АЛГОРИТМ ПОШУКУ СКІЛІВ  (IDF-зважений, розділяє задачу і контекст)
+//
+// Проблема «106 релевантних»:
+//   minScore=1 + generic токени (project, key, deps, compression) → майже кожен
+//   скіл в базі отримує score ≥ 1 через загальні слова.
+//
+// Рішення — двоетапне:
+//   1. extractTaskTokens(task) — ТІЛЬКИ текст задачі, без package.json/deps
+//      extractContextTokens(ctx) — ТІЛЬКИ контекст workspace (нижча вага)
+//
+//   2. IDF (Inverse Document Frequency):
+//      скануємо frontmatter всіх скілів один раз, рахуємо в скількох скілах
+//      зустрічається кожен токен. Токени що є у >30% скілів → вага ×0.2
+//      (вони загальні і не дають корисного сигналу).
+//
+//   3. Фінальний score:
+//        taskToken   → base weight × idf_weight   (повна вага)
+//        contextToken→ base weight × idf_weight × 0.4   (знижена вага)
+//      де base: tags×3, description×2, name/folder×1
+//
+//   4. minScore для першого запиту підвищено до 4 (замість 1)
+//      minScore для динамічного пошуку — 3 (замість 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Рахує score скіла відносно токенів задачі.
- * Токени задачі автоматично розширюються англійськими перекладами UA-слів.
- *   tags       → ×3
- *   description→ ×2
- *   name/folder→ ×1
- *   domain     → ×1
+ * Кеш IDF-ваг токенів — будується один раз за сесію для всіх скілів.
+ * { token → idfWeight }  де idfWeight ∈ (0, 1]
  */
-function scoreSkill(meta: SkillMeta, taskTokens: string[]): number {
-  if (taskTokens.length === 0) return 0;
+let _idfCache: Map<string, number> | null = null;
+let _idfSkillsPath = '';
 
-  // Розширюємо токени задачі перекладами — щоб "структуру" знаходила "structure"
-  const queryTokens = expandWithTranslations(taskTokens);
+/** Будує IDF-кеш: для кожного токена з frontmatter — частка скілів де він є */
+function buildIdfCache(skillsPath: string): Map<string, number> {
+  if (_idfCache && _idfSkillsPath === skillsPath) return _idfCache;
 
+  const files = scanSkillFolders(skillsPath);
+  if (files.length === 0) return new Map();
+
+  const docFreq = new Map<string, number>();  // token → скільки скілів містять
+
+  for (const filePath of files) {
+    const yaml = readFrontmatter(filePath);
+    if (!yaml) continue;
+
+    const p     = parseYaml(yaml);
+    const words = new Set<string>([
+      ...tokenize(String(p['name']        || '')),
+      ...tokenize(String(p['description'] || '')),
+      ...tokenize(String(p['domain']      || '')),
+      ...(Array.isArray(p['tags']) ? p['tags'].flatMap((t: string) => tokenize(t)) : []),
+    ]);
+    words.forEach(w => docFreq.set(w, (docFreq.get(w) ?? 0) + 1));
+  }
+
+  const N = files.length;
+  const cache = new Map<string, number>();
+
+  docFreq.forEach((df, token) => {
+    const ratio = df / N;
+    // Токени в >50% скілів — майже нульова вага (дуже загальні)
+    // Токени в 10-50% — середня вага
+    // Токени в <10% — повна вага
+    if      (ratio > 0.5) cache.set(token, 0.1);
+    else if (ratio > 0.3) cache.set(token, 0.3);
+    else if (ratio > 0.1) cache.set(token, 0.6);
+    else                  cache.set(token, 1.0);
+  });
+
+  _idfCache      = cache;
+  _idfSkillsPath = skillsPath;
+  oogLogger.appendLine(`[Skills] IDF побудовано: ${N} скілів, ${cache.size} унікальних токенів`);
+  return cache;
+}
+
+/** Повертає IDF-вагу токена (1.0 якщо токен унікальний / невідомий) */
+function idfWeight(token: string, idf: Map<string, number>): number {
+  return idf.get(token) ?? 1.0;
+}
+
+/**
+ * Розділяємо вхідний текст на ЗАДАЧУ і КОНТЕКСТ.
+ *
+ * Задача — перший рядок / те що написав користувач напряму.
+ * Контекст — package.json deps, активний файл, workspace info тощо.
+ *
+ * Токени задачі мають повну вагу в scoring.
+ * Токени контексту — знижену (×0.4), щоб залежності типу "compression"
+ * або "cors" не тягнули нерелевантні скіли.
+ */
+function splitTaskAndContext(combined: string): { taskTokens: string[]; contextTokens: string[] } {
+  const lines = combined.split('\n');
+
+  // Перші рядки до першого "Key deps:" / "Project:" / "Scripts:" — це задача
+  const ctxMarkers = ['Key deps:', 'key deps:', 'Project:', 'Scripts:', 'Active file:',
+    'Selected code:', 'WORKSPACE', 'deps:', 'dependencies:'];
+
+  let ctxStart = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (ctxMarkers.some(m => lines[i].startsWith(m))) { ctxStart = i; break; }
+  }
+
+  const taskText    = lines.slice(0, ctxStart).join('\n');
+  const contextText = lines.slice(ctxStart).join('\n');
+
+  const taskRaw    = extractQueryTokens(taskText);
+  const contextRaw = extractQueryTokens(contextText);
+
+  // Розширюємо тільки токени задачі UA→EN перекладами
+  const taskExpanded = expandWithTranslations(taskRaw);
+
+  // Контекстні токени: виключаємо ті що вже є в задачі (нема сенсу дублювати)
+  const contextUnique = contextRaw.filter(t => !taskExpanded.includes(t));
+
+  return { taskTokens: taskExpanded, contextTokens: contextUnique };
+}
+
+/**
+ * Рахує IDF-зважений score скіла.
+ *
+ * @param meta          метадані скіла
+ * @param taskTokens    токени задачі (повна вага)
+ * @param contextTokens токени контексту (знижена вага ×0.4)
+ * @param idf           IDF-кеш
+ */
+function scoreSkillIdf(
+    meta:           SkillMeta,
+    taskTokens:     string[],
+    contextTokens:  string[],
+    idf:            Map<string, number>,
+): number {
   const nameT   = tokenize(meta.name + ' ' + meta.folderName);
   const descT   = tokenize(meta.description);
   const domainT = tokenize(meta.domain + ' ' + meta.subdomain);
 
+  function baseScore(tw: string): number {
+    if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))            return 3;
+    if (descT.some(d => d === tw || d.includes(tw) || tw.includes(d)))                return 2;
+    if (nameT.some(n => n === tw || n.includes(tw) || tw.includes(n)))                return 1;
+    if (domainT.some(d => d.length > 2 && (d.includes(tw) || tw.includes(d))))        return 1;
+    return 0;
+  }
+
+  let score = 0;
+
+  // Токени задачі — повна вага × IDF
+  for (const tw of taskTokens) {
+    const base = baseScore(tw);
+    if (base > 0) score += base * idfWeight(tw, idf);
+  }
+
+  // Токени контексту — знижена вага (×0.4) × IDF
+  for (const tw of contextTokens) {
+    const base = baseScore(tw);
+    if (base > 0) score += base * idfWeight(tw, idf) * 0.4;
+  }
+
+  return score;
+}
+
+// Залишаємо старий scoreSkill як fallback (використовується в _discoverSkillsFromResult)
+function scoreSkill(meta: SkillMeta, taskTokens: string[]): number {
+  if (taskTokens.length === 0) return 0;
+  const queryTokens = expandWithTranslations(taskTokens);
+  const nameT   = tokenize(meta.name + ' ' + meta.folderName);
+  const descT   = tokenize(meta.description);
+  const domainT = tokenize(meta.domain + ' ' + meta.subdomain);
   let score = 0;
   for (const tw of queryTokens) {
     if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))           score += 3;
@@ -245,24 +394,9 @@ function scoreSkill(meta: SkillMeta, taskTokens: string[]): number {
   return score;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ЄДИНИЙ АЛГОРИТМ ПОШУКУ СКІЛІВ
-//
-// Один і той самий pipeline для першого запиту і динамічного пошуку:
-//
-//   extractQueryTokens(text) → очищаємо шум, токенізуємо
-//         ↓
-//   scanAndScoreAllSkills(tokens, alreadyLoaded, minScore)
-//       • читає frontmatter (~2 KB) кожного SKILL.md
-//       • scoreSkill(): tags×3, description×2, name/folder×1
-//       • повертає ВСІ скіли з score ≥ minScore, відсортовані DESC
-//         ↓
-//   loadTopSkills(scored, maxN) → завантажуємо ПОВНИЙ текст топ-N
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
  * Очищає текст від шуму і повертає унікальні значущі токени.
- * Використовується і для задачі користувача, і для tool_result.
+ * Використовується для tool_result у динамічному пошуку.
  */
 function extractQueryTokens(text: string): string[] {
   const cleaned = text
@@ -276,9 +410,71 @@ function extractQueryTokens(text: string): string[] {
 }
 
 /**
- * Сканує ВСІ SKILL.md, скорує кожен проти наданих токенів,
- * повертає відсортований список (DESC score).
+ * Сканує ВСІ SKILL.md з IDF-зваженим скорингом.
+ * Розділяє задачу і контекст для точнішого підбору.
+ *
+ * @param combined      повний текст (задача + контекст workspace)
+ * @param alreadyLoaded папки вже завантажених скілів
+ * @param minScore      мінімальний score (вищий = суворіший фільтр)
  */
+function scanAndScoreAllSkillsIdf(
+    combined:      string,
+    alreadyLoaded: Set<string> = new Set(),
+    minScore       = 4,
+): SkillMeta[] {
+  const skillsPath = getSkillsPath();
+  if (!skillsPath || !fs.existsSync(skillsPath)) return [];
+
+  const files = scanSkillFolders(skillsPath);
+  if (files.length === 0) return [];
+
+  const idf = buildIdfCache(skillsPath);
+  const { taskTokens, contextTokens } = splitTaskAndContext(combined);
+
+  if (taskTokens.length === 0 && contextTokens.length === 0) return [];
+
+  oogLogger.appendLine(
+      `[Skills] Task tokens: [${taskTokens.slice(0, 10).join(', ')}]` +
+      (contextTokens.length > 0 ? `  Context tokens: [${contextTokens.slice(0, 8).join(', ')}]` : '')
+  );
+
+  const scored: SkillMeta[] = [];
+
+  for (const filePath of files) {
+    const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+    if (alreadyLoaded.has(folderName)) continue;
+
+    const yaml = readFrontmatter(filePath);
+    let meta: SkillMeta;
+
+    if (yaml) {
+      const p = parseYaml(yaml);
+      meta = {
+        filePath, folderName,
+        name:        String(p['name']        || folderName),
+        description: String(p['description'] || ''),
+        domain:      String(p['domain']      || ''),
+        subdomain:   String(p['subdomain']   || ''),
+        tags:        Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
+        score:       0,
+      };
+    } else {
+      meta = {
+        filePath, folderName,
+        name: folderName, description: '', domain: '', subdomain: '',
+        tags: tokenize(folderName), score: 0,
+      };
+    }
+
+    meta.score = scoreSkillIdf(meta, taskTokens, contextTokens, idf);
+    if (meta.score >= minScore) scored.push(meta);
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored;
+}
+
+// Стара scanAndScoreAllSkills — залишається для discoverSkillsFromContext
 function scanAndScoreAllSkills(
     queryTokens:   string[],
     alreadyLoaded: Set<string> = new Set(),
@@ -331,7 +527,7 @@ function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
     try {
       const content = fs.readFileSync(meta.filePath, 'utf8');
       loaded.push({ ...meta, content });
-      oogLogger.appendLine(`[Skills] ✅ "${meta.name}"  folder=${meta.folderName}  score=${meta.score}`);
+      oogLogger.appendLine(`[Skills] ✅ "${meta.name}"  folder=${meta.folderName}  score=${meta.score.toFixed(2)}`);
     } catch (e: any) {
       oogLogger.appendLine(`[Skills] ⚠️  ${meta.folderName}: ${e.message}`);
     }
@@ -343,7 +539,7 @@ function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
 
 /**
  * Викликається ПЕРЕД запуском агента.
- * Перевіряє ВСІ скіли і завантажує топ-N найрелевантніших.
+ * Використовує IDF-зважений scoring з розділенням задачі і контексту.
  *
  * @param task             текст задачі від користувача
  * @param workspaceContext додатковий контекст (package.json, активний файл тощо)
@@ -354,22 +550,27 @@ export async function autoLoadSkillsForTask(
     workspaceContext = '',
     maxSkills = 3,
 ): Promise<LoadedSkill[]> {
-  // Об'єднуємо задачу і контекст workspace — разом дають повнішу картину.
-  // Наприклад: задача "Поясни структуру" + контекст "Project: deep-search-backend, deps: fastapi, sqlalchemy"
-  // → токени ['deep', 'search', 'backend', 'fastapi', 'sqlalchemy'] → знаходять релевантні скіли
-  const combined    = [task, workspaceContext].filter(Boolean).join('\n');
-  const queryTokens = extractQueryTokens(combined);
-  if (queryTokens.length === 0) return [];
+  const combined = [task, workspaceContext].filter(Boolean).join('\n');
+  if (!combined.trim()) return [];
 
-  oogLogger.appendLine(`[Skills] Аналіз задачі: tokens=[${queryTokens.slice(0, 15).join(', ')}]`);
+  // IDF-зважений пошук, minScore=4 — суворіший фільтр ніж раніше
+  // Це запобігає ситуації "106 релевантних" через generic токени
+  const allScored = scanAndScoreAllSkillsIdf(combined, new Set(), 4);
 
-  const allScored = scanAndScoreAllSkills(queryTokens, new Set(), 1);
+  if (allScored.length === 0) {
+    // Fallback: знижуємо поріг до 2 якщо нічого не знайдено при суворому фільтрі
+    oogLogger.appendLine('[Skills] minScore=4 нічого не дав → fallback minScore=2');
+    const fallback = scanAndScoreAllSkillsIdf(combined, new Set(), 2);
+    oogLogger.appendLine(
+        `[Skills] Fallback знайшов: ${fallback.length}` +
+        (fallback.length > 0 ? `, топ: ${fallback.slice(0,3).map(s=>`${s.folderName}(${s.score.toFixed(1)})`).join(', ')}` : '')
+    );
+    return loadTopSkills(fallback, maxSkills);
+  }
 
   oogLogger.appendLine(
-      `[Skills] Знайдено: ${allScored.length} релевантних` +
-      (allScored.length > 0
-          ? `, топ: ${allScored.slice(0, 5).map(s => `${s.folderName}(${s.score})`).join(', ')}`
-          : '')
+      `[Skills] Знайдено: ${allScored.length} (minScore≥4)` +
+      `, топ: ${allScored.slice(0, 5).map(s => `${s.folderName}(${s.score.toFixed(1)})`).join(', ')}`
   );
 
   return loadTopSkills(allScored, maxSkills);
@@ -392,7 +593,7 @@ export async function discoverSkillsFromContext(
     content:       string,
     alreadyLoaded: Set<string>,
     maxNew   = 2,
-    minScore = 2,
+    minScore = 3,   // підвищено з 2 до 3 — менше шуму від загальних слів
 ): Promise<{ skills: LoadedSkill[]; contextTokens: string[] }> {
   const empty = { skills: [], contextTokens: [] };
 
@@ -574,9 +775,27 @@ function resolvePath(p: string): string {
 
 // ── FILE TOOLS ────────────────────────────────────────────────────────────────
 
+const READ_FILE_MAX_BYTES = 100 * 1024; // 100 KB — захист від переповнення контексту LLM
+
 export async function readFile(args: any): Promise<ToolResult> {
   try {
-    return { ok: true, output: fs.readFileSync(resolvePath(args.path), 'utf8') };
+    const abs = resolvePath(args.path);
+    const stat = fs.statSync(abs);
+    if (stat.size > READ_FILE_MAX_BYTES) {
+      const fd  = fs.openSync(abs, 'r');
+      const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
+      const n   = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
+      fs.closeSync(fd);
+      const preview = buf.subarray(0, n).toString('utf8');
+      return {
+        ok: true,
+        output:
+          preview +
+          `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
+          ` Use specific line ranges if you need more.]`,
+      };
+    }
+    return { ok: true, output: fs.readFileSync(abs, 'utf8') };
   } catch (e: any) { return { ok: false, output: e.message }; }
 }
 
@@ -594,6 +813,9 @@ export async function writeFile(
   } catch (e: any) { return { ok: false, output: e.message }; }
 }
 
+// Директорії, які пропускаємо при переліку — зазвичай велика кількість файлів без корисного сигналу
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '__pycache__', '.venv', 'venv', '.next', '.nuxt', 'coverage']);
+
 export async function listFiles(args: any): Promise<ToolResult> {
   try {
     const base = resolvePath(args.path || '.');
@@ -605,10 +827,15 @@ export async function listFiles(args: any): Promise<ToolResult> {
       const out: string[] = [];
       let entries: string[];
       try { entries = fs.readdirSync(dir); } catch { return []; }
-      for (const e of entries.slice(0, 100)) {
+      for (const e of entries.slice(0, 150)) {
+        if (e.startsWith('.') && e !== '.env' && e !== '.gitignore') continue; // приховані файли крім важливих
         const full = path.join(dir, e);
         try {
           const isDir = fs.statSync(full).isDirectory();
+          if (isDir && SKIP_DIRS.has(e)) {
+            out.push(`${pad}📁 ${e}/ [skipped — heavy directory]`);
+            continue;
+          }
           out.push(`${pad}${isDir ? '📁' : '📄'} ${e}${isDir ? '/' : ''}`);
           if (isDir && d < depth) out.push(...walk(full, d + 1));
         } catch {}
@@ -626,13 +853,22 @@ export async function runTerminal(
   try {
     if (!args.command) return { ok: false, output: 'No command.' };
     if (!await onConfirm(args.command)) return { ok: false, output: 'Rejected.' };
-    const res = cp.execSync(args.command, {
-      cwd: args.cwd
-          ? resolvePath(args.cwd)
-          : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''),
-      timeout: 60_000,
+    const cwd = args.cwd
+        ? resolvePath(args.cwd)
+        : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '');
+
+    return new Promise((resolve) => {
+      cp.exec(args.command, { cwd, timeout: 60_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          // Деякі команди повертають ненульовий код але пишуть корисний stdout (npm test тощо)
+          const out = (stdout || '') + (stderr ? `\n[stderr]:\n${stderr}` : '');
+          resolve({ ok: false, output: out || err.message });
+        } else {
+          const out = stdout + (stderr ? `\n[stderr]:\n${stderr}` : '');
+          resolve({ ok: true, output: out || '(no output)' });
+        }
+      });
     });
-    return { ok: true, output: res.toString() };
   } catch (e: any) { return { ok: false, output: e.message }; }
 }
 

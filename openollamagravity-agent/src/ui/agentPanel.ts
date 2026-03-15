@@ -48,7 +48,7 @@ export class AgentPanel {
     this._panel = panel;
     this._loop = new AgentLoop(ollama);
 
-    const iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'icon.jpg');
+    const iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'icon.svg');
     const iconUri = panel.webview.asWebviewUri(iconPath);
 
     this._panel.webview.html = this._getHtml(iconUri);
@@ -506,7 +506,7 @@ export class AgentPanel {
       <span class="select-arrow">▼</span>
     </div>
     
-    <button id="btn-clear" id="btn-clear-txt">&#x2715; Очистити</button>
+    <button id="btn-clear">&#x2715; Очистити</button>
   </div>
 
   <div id="progress-wrap"><div id="progress-bar"></div></div>
@@ -726,6 +726,7 @@ export class AgentPanel {
     var nl = String.fromCharCode(10);
     var triple = bt + bt + bt;
 
+    // Fenced code blocks
     var fenceParts = text.split(triple);
     if (fenceParts.length > 1) {
       var rebuilt = '';
@@ -733,13 +734,14 @@ export class AgentPanel {
         if (i % 2 === 0) {
           rebuilt += fenceParts[i];
         } else {
-          var code = fenceParts[i].replace(new RegExp('^[a-zA-Z0-9_-]+' + nl), '');
+          var code = fenceParts[i].replace(new RegExp('^[a-zA-Z0-9_+#-]*' + nl), '');
           rebuilt += '<pre><code>' + escHtml(code.trim()) + '</code></pre>';
         }
       }
       text = rebuilt;
     }
 
+    // Inline code
     var inlineParts = text.split(bt);
     if (inlineParts.length > 1) {
       var rebuilt2 = '';
@@ -750,6 +752,7 @@ export class AgentPanel {
       text = rebuilt2;
     }
 
+    // Bold
     var boldParts = text.split('**');
     if (boldParts.length > 1) {
       var rebuilt3 = '';
@@ -760,8 +763,26 @@ export class AgentPanel {
       text = rebuilt3;
     }
 
-    text = text.split(nl).join('<br>');
-    return text;
+    // Process line-by-line: headers and list items
+    var resultLines = [];
+    var rawLines = text.split(nl);
+    for (var li = 0; li < rawLines.length; li++) {
+      var line = rawLines[li];
+      if (/^### /.test(line)) {
+        resultLines.push('<strong style="color:#94a3b8;font-size:12px">' + line.slice(4) + '</strong>');
+      } else if (/^## /.test(line)) {
+        resultLines.push('<strong style="color:#b0bec5;font-size:13px">' + line.slice(3) + '</strong>');
+      } else if (/^# /.test(line)) {
+        resultLines.push('<strong style="color:#cdd5df;font-size:14px">' + line.slice(2) + '</strong>');
+      } else if (/^[-*] /.test(line)) {
+        resultLines.push('&nbsp;&nbsp;• ' + line.slice(2));
+      } else if (/^\d+\. /.test(line)) {
+        resultLines.push('&nbsp;&nbsp;' + line);
+      } else {
+        resultLines.push(line);
+      }
+    }
+    return resultLines.join('<br>');
   }
 
   function addMsg(cssClass, labelHtml, bodyHtml, extraClass, rawText) {
@@ -871,6 +892,25 @@ export class AgentPanel {
           thinkStep.textContent = t.step + ' ' + ev.step + ' / ' + ev.totalSteps;
         }
         thinkLive.style.display = 'flex';
+        break;
+
+      case 'narration':
+        // Текст-пояснення агента перед кожним tool_call
+        if (ev.content && ev.content.trim()) {
+          addMsg('msg-status', '', '<em style="color:#64748b">' + escHtml(ev.content) + '</em>', '');
+        }
+        break;
+
+      case 'skills_loaded':
+      case 'skills_discovered':
+        if (ev.skills && ev.skills.length > 0) {
+          var skillsHtml = ev.skills.map(function(s) {
+            return '<span style="background:#1a1d21;border:1px solid #2a2d33;border-radius:3px;padding:1px 6px;margin-right:4px;font-family:monospace;font-size:10px;color:#94a3b8">' +
+              escHtml(s.name) + ' <span style="color:#475569">[' + s.score.toFixed(1) + ']</span></span>';
+          }).join('');
+          var icon = ev.type === 'skills_loaded' ? '📚' : '🔍';
+          addMsg('msg-status', '', icon + ' ' + skillsHtml, '');
+        }
         break;
 
       case 'thinking':

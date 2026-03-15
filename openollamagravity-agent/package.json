@@ -69,6 +69,11 @@
         "command": "openollamagravity.implement",
         "title": "Implement Stub/Comments",
         "category": "OpenOllamaGravity"
+      },
+      {
+        "command": "openollamagravity.syncSkills",
+        "title": "Sync Skills Repository",
+        "category": "OpenOllamaGravity"
       }
     ],
     "menus": {
@@ -188,6 +193,11 @@
           "type": "string",
           "default": "",
           "description": "Шлях до репозиторію skills (заповнюється автоматично при активації розширення)."
+        },
+        "openollamagravity.firstTokenTimeoutSec": {
+          "type": "number",
+          "default": 180,
+          "description": "Таймаут (секунди) очікування першого токена від Ollama. Якщо модель не відповіла за цей час — задача перривається. Збільшіть для повільних GPU або великих моделей."
         }
       }
     }

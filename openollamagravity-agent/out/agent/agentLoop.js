@@ -45,13 +45,13 @@ const Tools = __importStar(require("./tools"));
 //  2. autoLoadSkillsForTask(task) — сканує skills\, читає лише frontmatter,
 //     скорує по тексту задачі, завантажує ПОВНИЙ текст топ-3 скілів
 //  3. emit('skills_loaded') — UI показує які скіли підібрано
-//  4. buildSystemPrompt(language, loadedSkills) — формує промпт з вбудованими скілами
+//  4. buildSystemPrompt(language, skills, wsCtx, wsPath, wsRoot) — формує промпт
 //  5. history = [system, ...contextMessages, user:task]
 //  6. Цикл кроків: LLM → parseToolCall → executeTool → history → наступний крок
 //  7. Якщо LLM не повертає <tool_call> — emit('answer'), кінець
 // ─────────────────────────────────────────────────────────────────────────────
 // ── СИСТЕМНИЙ ПРОМПТ ──────────────────────────────────────────────────────────
-function buildSystemPrompt(language, skills, workspaceContext) {
+function buildSystemPrompt(language, skills, workspaceContext, workspacePath, workspaceRoot) {
     // Блок підібраних скілів — вставляємо ПОВНИЙ текст кожного
     const skillsBlock = skills.length === 0 ? '' : [
         '',
@@ -64,9 +64,17 @@ function buildSystemPrompt(language, skills, workspaceContext) {
             s.content),
         '━━━ END OF SKILLS ━━━',
     ].join('\n');
-    // Контекст workspace (активний файл, виділений код, package.json тощо)
+    // Контекст workspace (активний файл, package.json тощо)
     const wsBlock = workspaceContext
         ? `\n\nWORKSPACE CONTEXT:\n${workspaceContext}`
+        : '';
+    // Реальний шлях до workspace — агент використовує для побудови шляхів
+    // workspaceRoot — абсолютний шлях до кореня відкритого проекту
+    // Агент ЗОБОВ'ЯЗАНИЙ використовувати цей шлях і не вигадувати свій
+    const rootBlock = (workspaceRoot || workspacePath)
+        ? `\n\nWORKSPACE ROOT: ${workspaceRoot || workspacePath}\n`
+            + `MANDATORY: use this EXACT path for ALL file operations.\n`
+            + `NEVER invent or guess paths. Start with list_files on this root.`
         : '';
     return `You are an advanced autonomous coding and cybersecurity agent.
 You always explain what you are doing so the user understands your progress.
@@ -112,9 +120,10 @@ TECHNICAL RULES:
 2. WINDOWS PATHS — always double backslash in JSON args:
    CORRECT:   {"path": "D:\\\\web_project\\\\src\\\\main.ts"}
    INCORRECT: {"path": "D:\\web_project\\src\\main.ts"}
+   ALWAYS use ACTIVE WORKSPACE PATH (shown below) as base — do NOT invent paths.
 3. Use ONLY exact tool names listed above.
 4. If task needs a skill not loaded below → list_skills then read_skill.
-${skillsBlock}${wsBlock}`.trim();
+${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 // ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
 /**
@@ -231,13 +240,17 @@ class AgentLoop {
     //   КРОК 4: history = [system, contextMessages, user:task]
     //   КРОК 5+: цикл LLM → tool → result → history → наступний крок LLM
     //   ФІНАЛ: LLM відповідає без <tool_call> → emit('answer')
-    async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian') {
+    async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '') {
         this.running = true;
         this._abortCtrl = new AbortController();
         const signal = this._abortCtrl.signal;
         const maxSteps = vscode.workspace
             .getConfiguration('openollamagravity')
             .get('maxAgentSteps', 25);
+        // Якщо workspaceRoot не передано явно — беремо з VSCode
+        const resolvedRoot = workspaceRoot
+            || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+            || '';
         // ── КРОК 1-2: підбір скілів ─────────────────────────────────────────────
         // Виконуємо лише на початку нової сесії (history порожня).
         // При продовженні діалогу скіли вже вбудовані в перший system-message.
@@ -249,7 +262,9 @@ class AgentLoop {
                 //   readFrontmatter()  — читає лише перші 2 KB (YAML, ~30-50 токенів)
                 //   scoreSkill()       — tags×3, description×2, name/folder×1
                 //   Завантажуємо ПОВНИЙ текст лише топ-N скілів
-                loadedSkills = await Tools.autoLoadSkillsForTask(task, 3);
+                // Об'єднуємо задачу + контекст + шлях проекту для пошуку скілів
+                const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
+                loadedSkills = await Tools.autoLoadSkillsForTask(taskContext, workspaceContext, 3);
             }
             catch (e) {
                 client_1.oogLogger.appendLine(`[Agent] Skills auto-load error: ${e.message}`);
@@ -273,7 +288,9 @@ class AgentLoop {
                 client_1.oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
             }
             // КРОК 3: формуємо системний промпт з вбудованими скілами
-            const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext);
+            // workspacePath беремо напряму з VSCode — агент використовує його для шляхів
+            const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+            const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
             client_1.oogLogger.appendLine(`[Agent] System prompt: ${sysPrompt.length} chars` +
                 (loadedSkills.length > 0
                     ? `, включає ${loadedSkills.length} скіл(и)`

@@ -21,7 +21,6 @@ export class OllamaClient {
   private getDynamicContext(model: string): number {
     const m = model.toLowerCase();
 
-    // Піднімаємо глобальний дефолтний ліміт до 256K (262144), щоб лідер Qwen3 міг працювати на максимум
     const limit = this.cfg<number>('maxDynamicContext', 262144);
 
     // 256K: Абсолютний лідер
@@ -43,7 +42,7 @@ export class OllamaClient {
       return Math.min(131072, limit);
     }
 
-    // 100K: Специфічно для CodeLlama
+    // 100K: CodeLlama
     if (m.includes('codellama')) {
       return Math.min(102400, limit);
     }
@@ -58,24 +57,24 @@ export class OllamaClient {
       return Math.min(32768, limit);
     }
 
-    // 16K: Phi-4 (вкл. reasoning) та StarCoder2
+    // 16K: Phi-4 та StarCoder2
     if (m.includes('phi4') || m.includes('starcoder2')) {
       return Math.min(16384, limit);
     }
 
-    // 8K: Базові версії Llama 3, Gemma 1/2, та великі ембедінги
+    // 8K: Базові Llama 3, Gemma 1/2
     if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) {
       return Math.min(8192, limit);
     }
 
-    // 2K-4K: LLaVA, Moondream та застарілі моделі
+    // 2K-4K: LLaVA, Moondream
     if (m.includes('moondream')) return Math.min(2048, limit);
     if (m.includes('llava')) return Math.min(4096, limit);
 
-    // 512: Специфічні малі ембедінги (mxbai)
+    // 512: mxbai
     if (m.includes('mxbai')) return Math.min(512, limit);
 
-    // Дефолтний fallback для невідомих моделей (4K)
+    // Дефолт для невідомих моделей
     return Math.min(4096, limit);
   }
 
@@ -106,7 +105,14 @@ export class OllamaClient {
       let full = '';
       const url = new URL('/api/chat', this.cfg('ollamaUrl', 'http://localhost:11434'));
       const lib = url.protocol === 'https:' ? https : http;
-      const req = lib.request({ hostname: url.hostname, port: url.port || 11434, path: '/api/chat', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+      const defaultPort = url.protocol === 'https:' ? 443 : 11434;
+      const req = lib.request({
+        hostname: url.hostname,
+        port: url.port || defaultPort,
+        path: '/api/chat',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, res => {
         let buf = '';
         res.on('data', (chunk: Buffer) => {
           if (signal?.aborted) { req.destroy(); return; }
@@ -131,10 +137,12 @@ export class OllamaClient {
 
   /** Генерація для inlineCompletion та простих запитів */
   async generate(prompt: string, maxTokens = 256, modelOverride?: string): Promise<string> {
+    const targetModel = modelOverride || this.model;
+    const ctx = this.getDynamicContext(targetModel);
     const body = JSON.stringify({
-      model: modelOverride || this.model,
+      model: targetModel,
       prompt, stream: false,
-      options: { num_ctx: 4096, num_predict: maxTokens }
+      options: { num_ctx: Math.min(ctx, 8192), num_predict: maxTokens }
     });
     try {
       const res = await this.post('/api/generate', body);
@@ -145,15 +153,30 @@ export class OllamaClient {
   private async get(p: string): Promise<string> {
     return new Promise((res, rej) => {
       const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
-      http.get(url.toString(), r => { let d = ''; r.on('data', c => d += c); r.on('end', () => res(d)); }).on('error', rej);
+      const lib = url.protocol === 'https:' ? https : http;
+      const defaultPort = url.protocol === 'https:' ? 443 : 11434;
+      const options = {
+        hostname: url.hostname,
+        port: url.port || defaultPort,
+        path: p,
+      };
+      lib.get(options, r => { let d = ''; r.on('data', (c: Buffer) => d += c.toString()); r.on('end', () => res(d)); }).on('error', rej);
     });
   }
 
   private async post(p: string, b: string): Promise<string> {
     return new Promise((res, rej) => {
       const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
-      const req = http.request({ hostname: url.hostname, port: url.port || 11434, path: p, method: 'POST', headers: { 'Content-Type': 'application/json' } }, r => {
-        let d = ''; r.on('data', c => d += c); r.on('end', () => res(d));
+      const lib = url.protocol === 'https:' ? https : http;
+      const defaultPort = url.protocol === 'https:' ? 443 : 11434;
+      const req = lib.request({
+        hostname: url.hostname,
+        port: url.port || defaultPort,
+        path: p,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, r => {
+        let d = ''; r.on('data', (c: Buffer) => d += c.toString()); r.on('end', () => res(d));
       });
       req.on('error', rej); req.write(b); req.end();
     });
