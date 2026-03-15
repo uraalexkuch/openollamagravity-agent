@@ -279,7 +279,12 @@ export async function webSearch(args: any): Promise<ToolResult> {
     try {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
-      const bodyData = JSON.stringify({ query, focusMode: 'webSearch' });
+      const bodyData = JSON.stringify({
+        query,
+        focusMode: 'webSearch',
+        optimizationMode: 'balanced',
+        history: []
+      });
 
       const req = lib.request(url, {
         method: 'POST',
@@ -366,13 +371,18 @@ export async function readFile(args: any): Promise<ToolResult> {
   try {
     const abs = resolvePath(args.path);
     const stat = fs.statSync(abs);
+    if (stat.isDirectory()) {
+      return { ok: false, output: `Помилка: "${args.path}" є папкою (директорією). Щоб переглянути вміст папки, використовуйте list_files.` };
+    }
     if (stat.size > READ_FILE_MAX_BYTES) {
       const fd = fs.openSync(abs, 'r'); const buf = Buffer.alloc(READ_FILE_MAX_BYTES); const n = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0); fs.closeSync(fd);
       const preview = buf.subarray(0, n).toString('utf8');
       return { ok: true, output: preview + `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB. Use specific line ranges if you need more.]` };
     }
     return { ok: true, output: fs.readFileSync(abs, 'utf8') };
-  } catch (e: any) { return { ok: false, output: e.message }; }
+  } catch (e: any) {
+    return { ok: false, output: `Помилка читання файлу: ${e.message}` };
+  }
 }
 
 export async function writeFile(args: any, onConfirm: (p: string) => Promise<boolean>): Promise<ToolResult> {

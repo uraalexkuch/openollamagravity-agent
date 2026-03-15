@@ -374,7 +374,12 @@ async function webSearch(args) {
         try {
             const url = new URL('/api/search', perplexicaUrl);
             const lib = url.protocol === 'https:' ? https : http;
-            const bodyData = JSON.stringify({ query, focusMode: 'webSearch' });
+            const bodyData = JSON.stringify({
+                query,
+                focusMode: 'webSearch',
+                optimizationMode: 'balanced',
+                history: []
+            });
             const req = lib.request(url, {
                 method: 'POST',
                 headers: {
@@ -460,6 +465,9 @@ async function readFile(args) {
     try {
         const abs = resolvePath(args.path);
         const stat = fs.statSync(abs);
+        if (stat.isDirectory()) {
+            return { ok: false, output: `Помилка: "${args.path}" є папкою (директорією). Щоб переглянути вміст папки, використовуйте list_files.` };
+        }
         if (stat.size > READ_FILE_MAX_BYTES) {
             const fd = fs.openSync(abs, 'r');
             const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
@@ -471,7 +479,7 @@ async function readFile(args) {
         return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     }
     catch (e) {
-        return { ok: false, output: e.message };
+        return { ok: false, output: `Помилка читання файлу: ${e.message}` };
     }
 }
 async function writeFile(args, onConfirm) {
