@@ -167,7 +167,7 @@ class OllamaClient {
                                 reject(new Error(`Ollama Error: ${j.error}`));
                                 return;
                             }
-                            if (j.message?.content) {
+                            if (j.message && typeof j.message.content === 'string') {
                                 full += j.message.content;
                                 onChunk(j.message.content);
                             }

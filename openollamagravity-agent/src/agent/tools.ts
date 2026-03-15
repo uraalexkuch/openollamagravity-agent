@@ -602,57 +602,14 @@ export async function discoverSkillsFromContext(
   if (!content || content.length < 20) return empty;
 
   // Вилучаємо базові токени з тексту
+  // Не використовуємо хардкод мапінгу розширень, покладаємося суто на лексику контексту
   let contextTokens = extractQueryTokens(content);
-
-  // Аналізуємо розширення файлів для виявлення мови
-  const exts = new Set<string>();
-  const extRegex = /\.([a-zA-Z0-9]+)\b/g;
-  let match;
-  while ((match = extRegex.exec(content)) !== null) {
-    exts.add(match[1].toLowerCase());
-  }
-
-  // Маппінг розширень у ключові слова мов програмування
-  const extToLang: Record<string, string[]> = {
-    'ts': ['typescript', 'node', 'react', 'frontend', 'javascript'],
-    'js': ['javascript', 'node', 'react', 'frontend'],
-    'jsx': ['react', 'javascript', 'frontend'],
-    'tsx': ['react', 'typescript', 'frontend'],
-    'py': ['python', 'django', 'fastapi', 'flask'],
-    'go': ['golang', 'go'],
-    'rs': ['rust', 'cargo'],
-    'java': ['java', 'spring'],
-    'cs': ['csharp', 'dotnet'],
-    'cpp': ['cpp', 'cplusplus'],
-    'c': ['c'],
-    'php': ['php', 'laravel'],
-    'rb': ['ruby', 'rails'],
-    'swift': ['swift', 'ios'],
-    'kt': ['kotlin', 'android'],
-    'html': ['html', 'frontend'],
-    'css': ['css', 'frontend', 'tailwind'],
-    'scss': ['css', 'frontend', 'tailwind'],
-    'sql': ['sql', 'database', 'postgres', 'mysql'],
-    'sh': ['bash', 'shell'],
-    'yaml': ['yaml', 'docker', 'kubernetes', 'ci'],
-    'yml': ['yaml', 'docker', 'kubernetes', 'ci'],
-    'json': ['json']
-  };
-
-  const extraTokens: string[] = [];
-  for (const ext of exts) {
-    if (extToLang[ext]) {
-      extraTokens.push(...extToLang[ext]);
-    }
-  }
-
-  // Об'єднуємо токени, щоб підсилити пошук за мовою
-  contextTokens = [...new Set([...contextTokens, ...extraTokens])];
 
   if (contextTokens.length < 3) return empty;
 
   oogLogger.appendLine(`[Skills] Контекст з ${toolName}: tokens=[${contextTokens.slice(0, 10).join(', ')}]`);
 
+  // Використовуємо існуючий сканер для пошуку по токенах з контексту
   const newScored = scanAndScoreAllSkills(contextTokens, alreadyLoaded, minScore);
 
   if (newScored.length > 0) {
