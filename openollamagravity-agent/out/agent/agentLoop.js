@@ -90,48 +90,96 @@ AVAILABLE TOOLS:
 RULES:
 1. ONE <tool_call> block per response — nothing before or after it.
 2. Final answer (task complete, no more tool calls) → reply in ${language}, no XML.
-3. Use absolute paths for user project files.
+3. WINDOWS PATHS — always use double backslash in JSON args:
+   CORRECT:   {"path": "D:\\\\web_project\\\\src\\\\main.ts"}
+   INCORRECT: {"path": "D:\\web_project\\src\\main.ts"}
 4. Use ONLY exact tool names listed above — never invent new ones.
 5. If the task requires a skill NOT in the block below:
    a. Call list_skills to see all available skills (frontmatter only)
    b. Call read_skill {"name": "<folder-name>"} to load the relevant one
 ${skillsBlock}${wsBlock}`.trim();
 }
-// ── TOOL CALL PARSER ──────────────────────────────────────────────────────────
-// Підтримує <name>...</name> (стандарт у промпті).
-// Також приймає старий формат <n>...</n> як fallback.
+// ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
+/**
+ * Виправляє JSON з Windows-шляхами та іншими некоректними backslash.
+ *
+ * Проблема: LLM генерує {"path": "D:\web_project\src"} де \w, \s — не валідні
+ * JSON escape → JSON.parse кидає SyntaxError.
+ *
+ * Рішення: посимвольний обхід JSON-рядків, подвоюємо лише невалідні escapes.
+ * Валідні JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
+ */
+function repairJson(raw) {
+    let result = '';
+    let inString = false;
+    let i = 0;
+    while (i < raw.length) {
+        const ch = raw[i];
+        if (!inString) {
+            if (ch === '"') {
+                inString = true;
+            }
+            result += ch;
+            i++;
+            continue;
+        }
+        if (ch === '\\') {
+            const next = raw[i + 1] ?? '';
+            if (/["\\\/bfnrtu]/.test(next)) {
+                result += ch + next; // валідний escape — залишаємо
+            }
+            else {
+                result += '\\\\' + next; // невалідний escape — подвоюємо backslash
+            }
+            i += 2;
+            continue;
+        }
+        if (ch === '"') {
+            inString = false;
+        }
+        result += ch;
+        i++;
+    }
+    return result;
+}
+/**
+ * Парсить <tool_call> блок з відповіді LLM.
+ * Три спроби: прямий parse → auto-repair → error повернення агенту.
+ * Ніколи не ковтає помилку мовчки — агент завжди знає що пішло не так.
+ */
 function parseToolCall(text) {
-    // Знаходимо перший <tool_call>...</tool_call> блок
     const block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
     if (!block)
         return null;
     const inner = block[1];
-    // Парсимо назву інструменту: <name>...</name> або <n>...</n>
-    const nameMatch = inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
-        inner.match(/<n>\s*([\w_]+)\s*<\/n>/i);
+    const nameMatch = inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
+        inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
     if (!nameMatch)
         return null;
     const name = nameMatch[1].trim();
-    // Парсимо аргументи
     const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
     if (!argsMatch)
         return { name, args: {} };
     const raw = argsMatch[1].trim();
     if (!raw || raw === '{}')
         return { name, args: {} };
+    // Спроба 1: прямий parse
     try {
-        // Нормалізуємо Windows-шляхи: одиночний \ → \\ щоб JSON.parse не падав
-        const fixed = raw.replace(/"(path|cwd|name|command)"\s*:\s*"((?:[^"\\]|\\.)*)"/g, (_, k, v) => {
-            // Якщо вже є \\ — не подвоюємо ще раз
-            const normalized = v.replace(/\\(?!\\)/g, '\\\\');
-            return `"${k}": "${normalized}"`;
-        });
-        return { name, args: JSON.parse(fixed) };
+        return { name, args: JSON.parse(raw) };
     }
-    catch {
-        // JSON parse failed — повертаємо name без args замість null,
-        // щоб агент отримав помилку і міг виправити свій виклик
-        return { name, args: {} };
+    catch { /* next */ }
+    // Спроба 2: auto-repair backslash
+    try {
+        const args = JSON.parse(repairJson(raw));
+        client_1.oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
+        return { name, args };
+    }
+    catch (e) {
+        // Спроба 3: повертаємо parseError — агент отримає конкретне повідомлення
+        const preview = raw.slice(0, 120).replace(/\n/g, ' ');
+        const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
+        client_1.oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
+        return { name, args: {}, parseError: msg };
     }
 }
 // ── AGENT LOOP ────────────────────────────────────────────────────────────────
@@ -241,7 +289,30 @@ class AgentLoop {
                 this.emit({ type: 'answer', content: output });
                 break;
             }
-            // Є tool_call → виконуємо інструмент
+            // Якщо args не вдалось розпарсити — повертаємо помилку агенту одразу,
+            // не викликаємо інструмент з порожніми args (це призводить до "вкажіть path")
+            if (tool.parseError) {
+                this.emit({
+                    type: 'tool_call', content: `Parse error: ${tool.name}`,
+                    toolName: tool.name, toolArgs: {},
+                });
+                const errMsg = `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
+                    `Error: ${tool.parseError}\n\n` +
+                    `REQUIRED FIX:\n` +
+                    `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
+                    `2. Escape all special chars in JSON strings\n` +
+                    `3. Do NOT use single backslash \\ inside JSON strings\n` +
+                    `Retry your tool call with correct JSON.`;
+                this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
+                this._history.push({ role: 'assistant', content: output });
+                this._history.push({
+                    role: 'user',
+                    content: `<tool_result>\n<n>${tool.name}</n>\n<ok>false</ok>\n` +
+                        `<o>${errMsg}</o>\n</tool_result>`,
+                });
+                continue; // даємо агенту шанс виправитись
+            }
+            // Є tool_call з валідними args → виконуємо інструмент
             this.emit({
                 type: 'tool_call', content: `Calling: ${tool.name}`,
                 toolName: tool.name, toolArgs: tool.args,

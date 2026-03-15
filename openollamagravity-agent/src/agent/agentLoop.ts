@@ -12,6 +12,7 @@ export type AgentEventType =
     | 'error'
     | 'done'
     | 'step'
+    | 'narration'         // пояснення агента перед викликом інструменту
     | 'skills_loaded'     // початковий підбір скілів по задачі
     | 'skills_discovered'; // динамічний пошук під час виконання
 
@@ -71,14 +72,29 @@ function buildSystemPrompt(
       : '';
 
   return `You are an advanced autonomous coding and cybersecurity agent.
+You always explain what you are doing so the user understands your progress.
 
-CRITICAL INSTRUCTION:
-To call a tool, output ONLY the raw XML block below. No prose, no markdown.
+OUTPUT FORMAT — two allowed forms:
 
-<tool_call>
-<name>tool_name_here</name>
-<args>{"key": "value"}</args>
-</tool_call>
+FORM A — calling a tool (narration + tool call):
+Write 1-2 sentences in ${language} explaining WHAT you found or plan to do, THEN the tool call.
+Example:
+  Починаю з огляду структури проекту, щоб зрозуміти архітектуру.
+  <tool_call>
+  <n>list_files</n>
+  <args>{"path": "D:\\\\web_project", "depth": 2}</args>
+  </tool_call>
+
+FORM B — final answer (no more tool calls):
+Reply fully in ${language}. No XML. Summarise what was done.
+
+NARRATION RULES:
+- Write 1-2 sentences BEFORE every tool call: what you found / what you plan / why
+- After reading a file → mention detected language or framework
+- After listing files → mention key files or directories you noticed
+- After writing a file → confirm what was created and its purpose
+- Keep it concise — one clear thought per step
+- NEVER output a <tool_call> without at least one narration sentence before it
 
 AVAILABLE TOOLS:
 - name: list_files        args: {"path": "...", "depth": 3}
@@ -89,18 +105,16 @@ AVAILABLE TOOLS:
 - name: list_skills       args: {}
 - name: read_skill        args: {"name": "folder-name-of-skill"}
 
-RULES:
-1. ONE <tool_call> block per response — nothing before or after it.
-2. Final answer (task complete, no more tool calls) → reply in ${language}, no XML.
-3. WINDOWS PATHS — always use double backslash in JSON args:
+TECHNICAL RULES:
+1. ONE <tool_call> block per response — at the end, after narration.
+2. WINDOWS PATHS — always double backslash in JSON args:
    CORRECT:   {"path": "D:\\\\web_project\\\\src\\\\main.ts"}
    INCORRECT: {"path": "D:\\web_project\\src\\main.ts"}
-4. Use ONLY exact tool names listed above — never invent new ones.
-5. If the task requires a skill NOT in the block below:
-   a. Call list_skills to see all available skills (frontmatter only)
-   b. Call read_skill {"name": "<folder-name>"} to load the relevant one
+3. Use ONLY exact tool names listed above.
+4. If task needs a skill not loaded below → list_skills then read_skill.
 ${skillsBlock}${wsBlock}`.trim();
 }
+
 
 // ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
 
@@ -153,12 +167,17 @@ function repairJson(raw: string): string {
  * Ніколи не ковтає помилку мовчки — агент завжди знає що пішло не так.
  */
 function parseToolCall(text: string): {
-  name: string;
-  args: any;
+  name:        string;
+  args:        any;
+  narration:   string;   // текст до <tool_call> — пояснення агента
   parseError?: string;
 } | null {
   const block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
   if (!block) return null;
+
+  // Витягуємо текст ДО <tool_call> — це пояснення/нарація агента
+  const blockStart = text.indexOf('<tool_call>');
+  const narration  = text.slice(0, blockStart).trim();
 
   const inner = block[1];
 
@@ -169,25 +188,25 @@ function parseToolCall(text: string): {
   const name = nameMatch[1].trim();
 
   const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
-  if (!argsMatch) return { name, args: {} };
+  if (!argsMatch) return { name, narration, args: {} };
 
   const raw = argsMatch[1].trim();
-  if (!raw || raw === '{}') return { name, args: {} };
+  if (!raw || raw === '{}') return { name, narration, args: {} };
 
   // Спроба 1: прямий parse
-  try { return { name, args: JSON.parse(raw) }; } catch { /* next */ }
+  try { return { name, narration, args: JSON.parse(raw) }; } catch { /* next */ }
 
   // Спроба 2: auto-repair backslash
   try {
     const args = JSON.parse(repairJson(raw));
     oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
-    return { name, args };
+    return { name, narration, args };
   } catch (e: any) {
     // Спроба 3: повертаємо parseError — агент отримає конкретне повідомлення
     const preview = raw.slice(0, 120).replace(/\n/g, ' ');
     const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
     oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
-    return { name, args: {}, parseError: msg };
+    return { name, narration, args: {}, parseError: msg };
   }
 }
 
@@ -323,6 +342,11 @@ export class AgentLoop {
         // Немає <tool_call> → LLM завершив задачу, повертаємо відповідь
         this.emit({ type: 'answer', content: output });
         break;
+      }
+
+      // Нарація — текст який агент написав ПЕРЕД <tool_call>
+      if (tool.narration) {
+        this.emit({ type: 'narration', content: tool.narration });
       }
 
       // Якщо args не вдалось розпарсити — повертаємо помилку агенту одразу,
