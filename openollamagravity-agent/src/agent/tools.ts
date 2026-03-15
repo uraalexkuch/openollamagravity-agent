@@ -283,11 +283,13 @@ export async function webSearch(args: any): Promise<ToolResult> {
   oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode}, model=${currentModel})`);
 
   try {
+    // Спробуємо новий API (providerId/key + sources) та старий (provider/model) через fallback
     const body = JSON.stringify({
       query,
       focusMode,
       optimizationMode: 'speed',
-      chatModel: { provider: 'ollama', model: currentModel },
+      sources: ['web'],                                         // обов'язкове поле у нових версіях Perplexica
+      chatModel: { provider: 'ollama', model: currentModel },  // формат для Perplexica ≤ legacy
       embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' }
     });
 

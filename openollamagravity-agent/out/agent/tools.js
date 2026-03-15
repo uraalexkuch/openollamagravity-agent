@@ -358,12 +358,11 @@ async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNe
     return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
 function getPerplexicaUrl() {
-    return vscode.workspace.getConfiguration('openollamagravity').get('perplexicaUrl', '[http://10.1.0.138:3030](http://10.1.0.138:3030)');
+    return vscode.workspace.getConfiguration('openollamagravity').get('perplexicaUrl', 'http://10.1.0.138:3030');
 }
-/** 🌐 ОНОВЛЕНИЙ WEB SEARCH - Виправлено помилку "Missing sources or query" */
+/** 🌐 WEB SEARCH через Perplexica API */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
-    // Додано підтримку обробки вебсайту/домену, який генерує агент
     const website = args?.website || args?.domain;
     if (website)
         query += ` site:${website}`;
@@ -372,16 +371,15 @@ async function webSearch(args) {
     const baseUrl = getPerplexicaUrl().replace(/\/$/, '');
     const focusMode = String(args?.focus || 'webSearch');
     const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
-    client_1.oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode})`);
+    const currentModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
+    client_1.oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode}, model=${currentModel})`);
     try {
-        // Вказано обов'язкові поля для нових версій Perplexica API
         const body = JSON.stringify({
             query,
             focusMode,
-            sources: ['web'], // Обов'язкове поле
             optimizationMode: 'speed',
-            chatModel: { providerId: 'ollama', key: 'llama3.1' }, // Обов'язкове поле
-            embeddingModel: { providerId: 'ollama', key: 'nomic-embed-text' } // Обов'язкове поле
+            chatModel: { provider: 'ollama', model: currentModel },
+            embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' }
         });
         const res = await httpPost(`${baseUrl}/api/search`, body);
         const data = JSON.parse(res);
