@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.autoLoadSkillsForTask = autoLoadSkillsForTask;
+exports.discoverSkillsFromContext = discoverSkillsFromContext;
 exports.readFile = readFile;
 exports.writeFile = writeFile;
 exports.listFiles = listFiles;
@@ -176,35 +177,54 @@ function scoreSkill(meta, taskTokens) {
     }
     return score;
 }
-// ── PUBLIC: автоматичний підбір скілів ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ЄДИНИЙ АЛГОРИТМ ПОШУКУ СКІЛІВ
+//
+// Один і той самий pipeline для першого запиту і динамічного пошуку:
+//
+//   extractQueryTokens(text) → очищаємо шум, токенізуємо
+//         ↓
+//   scanAndScoreAllSkills(tokens, alreadyLoaded, minScore)
+//       • читає frontmatter (~2 KB) кожного SKILL.md
+//       • scoreSkill(): tags×3, description×2, name/folder×1
+//       • повертає ВСІ скіли з score ≥ minScore, відсортовані DESC
+//         ↓
+//   loadTopSkills(scored, maxN) → завантажуємо ПОВНИЙ текст топ-N
+// ─────────────────────────────────────────────────────────────────────────────
 /**
- * Викликається ПЕРЕД запуском агента.
- * Аналізує задачу, читає frontmatter кожного скіла (~2 KB),
- * повертає топ-N скілів з ПОВНИМ текстом.
- *
- * @param task      текст задачі / промпт користувача
- * @param maxSkills максимальна кількість скілів у промпті (default: 3)
+ * Очищає текст від шуму і повертає унікальні значущі токени.
+ * Використовується і для задачі користувача, і для tool_result.
  */
-async function autoLoadSkillsForTask(task, maxSkills = 3) {
+function extractQueryTokens(text) {
+    const cleaned = text
+        .slice(0, 4096)
+        .replace(/[A-Za-z]:\\[\w\\.\ \-]*/g, ' ') // Windows-шляхи
+        .replace(/\/[\w\/.\-]+/g, ' ') // Unix-шляхи
+        .replace(/https?:\/\/\S+/g, ' ') // URL
+        .replace(/\b\d{2,}\b/g, ' ') // числа 2+ цифри
+        .replace(/[^\w\s]/g, ' '); // спецсимволи
+    return [...new Set(tokenize(cleaned))];
+}
+/**
+ * Сканує ВСІ SKILL.md, скорує кожен проти наданих токенів,
+ * повертає відсортований список (DESC score).
+ */
+function scanAndScoreAllSkills(queryTokens, alreadyLoaded = new Set(), minScore = 1) {
     const skillsPath = getSkillsPath();
     if (!skillsPath || !fs.existsSync(skillsPath))
         return [];
     const files = scanSkillFolders(skillsPath);
-    if (files.length === 0)
-        return [];
-    const taskTokens = tokenize(task);
     const scored = [];
     for (const filePath of files) {
-        // Для пласкої структури: "10-andruia-skill-smith"
-        // Для вкладеної:         "cybersecurity/volatility3"
         const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+        if (alreadyLoaded.has(folderName))
+            continue;
         const yaml = readFrontmatter(filePath);
         let meta;
         if (yaml) {
             const p = parseYaml(yaml);
             meta = {
-                filePath,
-                folderName,
+                filePath, folderName,
                 name: String(p['name'] || folderName),
                 description: String(p['description'] || ''),
                 domain: String(p['domain'] || ''),
@@ -214,33 +234,82 @@ async function autoLoadSkillsForTask(task, maxSkills = 3) {
             };
         }
         else {
-            // SKILL.md без frontmatter — токенізуємо назву папки як теги
             meta = {
                 filePath, folderName,
                 name: folderName, description: '', domain: '', subdomain: '',
                 tags: tokenize(folderName), score: 0,
             };
         }
-        meta.score = scoreSkill(meta, taskTokens);
-        if (meta.score > 0)
+        meta.score = scoreSkill(meta, queryTokens);
+        if (meta.score >= minScore)
             scored.push(meta);
     }
-    // Сортуємо за score DESC
     scored.sort((a, b) => b.score - a.score);
-    const top = scored.slice(0, maxSkills);
-    // Завантажуємо ПОВНИЙ текст лише обраних
+    return scored;
+}
+/** Завантажує ПОВНИЙ текст для топ-N скілів зі списку. */
+function loadTopSkills(scored, maxSkills) {
     const loaded = [];
-    for (const meta of top) {
+    for (const meta of scored.slice(0, maxSkills)) {
         try {
             const content = fs.readFileSync(meta.filePath, 'utf8');
             loaded.push({ ...meta, content });
-            client_1.oogLogger.appendLine(`[Skills] ✅ ${meta.folderName} (score=${meta.score})`);
+            client_1.oogLogger.appendLine(`[Skills] ✅ "${meta.name}"  folder=${meta.folderName}  score=${meta.score}`);
         }
         catch (e) {
             client_1.oogLogger.appendLine(`[Skills] ⚠️  ${meta.folderName}: ${e.message}`);
         }
     }
     return loaded;
+}
+// ── PHASE 1: підбір скілів для першого запиту ────────────────────────────────
+/**
+ * Викликається ПЕРЕД запуском агента.
+ * Перевіряє ВСІ скіли і завантажує топ-N найрелевантніших.
+ * Той самий pipeline що й discoverSkillsFromContext.
+ *
+ * @param task      текст задачі від користувача
+ * @param maxSkills максимум скілів у системному промпті (default: 3)
+ */
+async function autoLoadSkillsForTask(task, maxSkills = 3) {
+    const queryTokens = extractQueryTokens(task);
+    if (queryTokens.length === 0)
+        return [];
+    client_1.oogLogger.appendLine(`[Skills] Аналіз задачі: tokens=[${queryTokens.slice(0, 12).join(', ')}]`);
+    const allScored = scanAndScoreAllSkills(queryTokens, new Set(), 1);
+    client_1.oogLogger.appendLine(`[Skills] Знайдено: ${allScored.length} релевантних` +
+        (allScored.length > 0
+            ? `, топ: ${allScored.slice(0, 5).map(s => `${s.folderName}(${s.score})`).join(', ')}`
+            : ''));
+    return loadTopSkills(allScored, maxSkills);
+}
+// ── PHASE 2: динамічний пошук під час роботи ─────────────────────────────────
+/**
+ * Аналізує вміст tool_result і знаходить нові скіли напряму по тексту.
+ * Жодних хардкодованих патернів — контент сам є пошуковим запитом.
+ *
+ * @param toolName      назва інструменту (фільтр)
+ * @param content       текст відповіді інструменту
+ * @param alreadyLoaded множина folderName вже завантажених скілів
+ * @param maxNew        максимум нових скілів (default: 2)
+ * @param minScore      мінімальний score (default: 2 — суворіше ніж при старті)
+ */
+async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNew = 2, minScore = 2) {
+    const empty = { skills: [], contextTokens: [] };
+    if (!['read_file', 'list_files', 'run_terminal'].includes(toolName))
+        return empty;
+    if (!content || content.length < 20)
+        return empty;
+    const contextTokens = extractQueryTokens(content);
+    if (contextTokens.length < 3)
+        return empty;
+    client_1.oogLogger.appendLine(`[Skills] Контекст з ${toolName}: tokens=[${contextTokens.slice(0, 10).join(', ')}]`);
+    const newScored = scanAndScoreAllSkills(contextTokens, alreadyLoaded, minScore);
+    if (newScored.length > 0) {
+        client_1.oogLogger.appendLine(`[Skills] Контекст знайшов: ${newScored.length} нових` +
+            `, топ: ${newScored.slice(0, 3).map(s => `${s.folderName}(${s.score})`).join(', ')}`);
+    }
+    return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
 // ── PATH RESOLVER ─────────────────────────────────────────────────────────────
 function resolvePath(p) {
