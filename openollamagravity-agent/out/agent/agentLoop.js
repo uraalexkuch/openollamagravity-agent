@@ -61,12 +61,12 @@ function buildSystemPrompt(language, skills, workspaceContext, workspacePath, wo
 You are an expert AI software engineer. Complete the task efficiently using the tools below.
 
 ### CONSTRAINTS:
-1. Format Tool Calls as XML:
 <tool_call>
 <name>TOOL_NAME</name>
 <args>{"arg": "val"}</args>
 </tool_call>
-2. Language: Always respond in ${language}.
+2. Exact Tags: Use ONLY <tool_call>, <name>, and <args>. Do NOT use <n>.
+3. Language: Always respond in ${language}.
 3. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
 4. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
 
@@ -142,7 +142,8 @@ function parseToolCall(text) {
     const blockStart = text.indexOf('<tool_call>');
     const narration = text.slice(0, blockStart).trim();
     const inner = block[1];
-    const nameMatch = inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
+    const nameMatch = inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
+        inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
         inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
     if (!nameMatch)
         return null;
@@ -201,7 +202,7 @@ class AgentLoop {
     //   КРОК 4: history = [system, contextMessages, user:task]
     //   КРОК 5+: цикл LLM → tool → result → history → наступний крок LLM
     //   ФІНАЛ: LLM відповідає без <tool_call> → emit('answer')
-    async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '') {
+    async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '', selectedSkillFolders = []) {
         this.running = true;
         this._abortCtrl = new AbortController();
         const signal = this._abortCtrl.signal;
@@ -217,37 +218,43 @@ class AgentLoop {
         // При продовженні діалогу скіли вже вбудовані в перший system-message.
         let loadedSkills = [];
         if (this._history.length === 0) {
+            const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
+            if (selectedSkillFolders.length > 0) {
+                try {
+                    const skillsPath = Tools.getSkillsPath();
+                    const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0); // score 0 to get all requested
+                    const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
+                    loadedSkills = Tools.loadTopSkills(toLoad, 10);
+                }
+                catch (e) {
+                    client_1.oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
+                }
+            }
             /*
             try {
-              const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
               loadedSkills = await Tools.autoLoadSkillsForTask(taskContext, workspaceContext, 3);
             } catch (e: any) {
               oogLogger.appendLine(`[Agent] Skills auto-load error: ${e.message}`);
             }
-      
-            if (loadedSkills.length > 0) {
-              this.emit({
-                type:    'skills_loaded',
-                content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-                skills:  loadedSkills.map(s => ({
-                  name:        s.name,
-                  folderName:  s.folderName,
-                  description: s.description,
-                  score:       s.score,
-                })),
-              });
-              oogLogger.appendLine(
-                  '[Agent] Скіли для задачі:\n' +
-                  loadedSkills.map(s =>
-                      `  • [${s.score}] ${s.folderName}  →  "${s.name}"`
-                  ).join('\n')
-              );
-            } else {
-              oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
-            }
             */
+            if (loadedSkills.length > 0) {
+                this.emit({
+                    type: 'skills_loaded',
+                    content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
+                    skills: loadedSkills.map(s => ({
+                        name: s.name,
+                        folderName: s.folderName,
+                        description: s.description,
+                        score: s.score,
+                    })),
+                });
+                client_1.oogLogger.appendLine('[Agent] Скіли для задачі:\n' +
+                    loadedSkills.map(s => `  • [${s.score}] ${s.folderName}  →  "${s.name}"`).join('\n'));
+            }
+            else {
+                client_1.oogLogger.appendLine('[Agent] Релевантних скілів не знайдено — продовжую без них.');
+            }
             // КРОК 3: формуємо системний промпт з вбудованими скілами
-            // workspacePath беремо напряму з VSCode — агент використовує його для шляхів
             const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
             const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
             client_1.oogLogger.appendLine(`[Agent] System prompt: ${sysPrompt.length} chars` +
@@ -281,24 +288,27 @@ class AgentLoop {
             // Парсимо відповідь: tool_call або фінальна відповідь
             const tool = parseToolCall(output);
             if (!tool) {
-                // [Catch-and-Retry] Перевіряємо чи не забув агент XML теги для інструментів
+                const isBrokenTags = output.includes('<tool_call>');
                 const toolNames = [
                     'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
                     'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
                     'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill'
                 ];
                 const forgottenTool = toolNames.find(tn => output.includes(tn));
-                if (forgottenTool && output.length < 500) { // Якщо відповідь коротка і містить назву інструменту
-                    this.emit({ type: 'narration', content: `⚠️ Виявлено команду без XML-тегів (${forgottenTool}). Прошу агента виправити формат...` });
+                if (isBrokenTags || (forgottenTool && output.length < 500)) {
+                    const reason = isBrokenTags
+                        ? `malformed <tool_call> structure`
+                        : `missing <tool_call> tags for ${forgottenTool}`;
+                    this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
                     this._history.push({ role: 'assistant', content: output });
                     this._history.push({
                         role: 'user',
-                        content: `ERROR: You used the tool "${forgottenTool}" without <tool_call> tags.\n` +
-                            `FIX: Every tool call MUST be wrapped in: <tool_call><name>...</name><args>...</args></tool_call>\n` +
-                            `Example: <tool_call><name>${forgottenTool}</name><args>{"query": "..."}</args></tool_call>\n` +
+                        content: `ERROR: Your tool call is malformed or missing tags.\n` +
+                            `FIX: Every tool call MUST be: <tool_call><name>NAME</name><args>{...}</args></tool_call>\n` +
+                            `Double check that you use <name> and <args> inside <tool_call>.\n` +
                             `Please retry with the correct XML format.`
                     });
-                    continue; // Йдемо на наступну ітерацію (retry)
+                    continue; // retry
                 }
                 // Немає <tool_call> і це не схоже на забутий тег → LLM завершив задачу
                 this.emit({ type: 'answer', content: output });

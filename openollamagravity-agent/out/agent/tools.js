@@ -33,6 +33,10 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getAllSkills = getAllSkills;
+exports.getSkillsPath = getSkillsPath;
+exports.scanAndScoreAllSkillsIdf = scanAndScoreAllSkillsIdf;
+exports.loadTopSkills = loadTopSkills;
 exports.autoLoadSkillsForTask = autoLoadSkillsForTask;
 exports.discoverSkillsFromContext = discoverSkillsFromContext;
 exports.webSearch = webSearch;
@@ -57,6 +61,38 @@ const cp = __importStar(require("child_process"));
 const client_1 = require("../ollama/client");
 const http = __importStar(require("http"));
 const https = __importStar(require("https"));
+/** Повертає список метаданих всіх доступних скілів для UI */
+async function getAllSkills() {
+    const skillsPath = getSkillsPath();
+    if (!skillsPath || !fs.existsSync(skillsPath))
+        return [];
+    const files = scanSkillFolders(skillsPath);
+    const result = [];
+    for (const filePath of files) {
+        const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+        const yaml = readFrontmatter(filePath);
+        if (yaml) {
+            const p = parseYaml(yaml);
+            result.push({
+                filePath, folderName,
+                name: String(p['name'] || folderName),
+                description: String(p['description'] || ''),
+                domain: String(p['domain'] || ''),
+                subdomain: String(p['subdomain'] || ''),
+                tags: Array.isArray(p['tags']) ? p['tags'] : [],
+                score: 0,
+            });
+        }
+        else {
+            result.push({
+                filePath, folderName,
+                name: folderName, description: '', domain: '', subdomain: '',
+                tags: [], score: 0
+            });
+        }
+    }
+    return result;
+}
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function getSkillsPath() {
     return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
