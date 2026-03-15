@@ -282,7 +282,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
     try {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
-      const bodyData = JSON.stringify({ query, focusMode });
+      const bodyData = JSON.stringify({ query, focusMode, sources: ['web'] });
 
       const req = lib.request(url, {
         method: 'POST',
