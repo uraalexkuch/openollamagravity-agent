@@ -72,15 +72,29 @@ async function getAllSkills() {
         const yaml = readFrontmatter(filePath);
         if (yaml) {
             const p = parseYaml(yaml);
-            result.push({ filePath, folderName, name: String(p['name'] || folderName), description: String(p['description'] || ''), domain: String(p['domain'] || ''), subdomain: String(p['subdomain'] || ''), tags: Array.isArray(p['tags']) ? p['tags'] : [], score: 0 });
+            result.push({
+                filePath, folderName,
+                name: String(p['name'] || folderName),
+                description: String(p['description'] || ''),
+                domain: String(p['domain'] || ''),
+                subdomain: String(p['subdomain'] || ''),
+                tags: Array.isArray(p['tags']) ? p['tags'] : [],
+                score: 0,
+            });
         }
         else {
-            result.push({ filePath, folderName, name: folderName, description: '', domain: '', subdomain: '', tags: [], score: 0 });
+            result.push({
+                filePath, folderName,
+                name: folderName, description: '', domain: '', subdomain: '',
+                tags: [], score: 0
+            });
         }
     }
     return result;
 }
-function getSkillsPath() { return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', ''); }
+function getSkillsPath() {
+    return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
+}
 function scanSkillFolders(skillsPath) {
     const skillMd = [];
     const legacyMd = [];
@@ -98,12 +112,15 @@ function scanSkillFolders(skillsPath) {
             const full = path.join(dir, entry);
             try {
                 const stat = fs.statSync(full);
-                if (stat.isDirectory())
+                if (stat.isDirectory()) {
                     walk(full);
-                else if (entry === 'SKILL.md')
+                }
+                else if (entry === 'SKILL.md') {
                     skillMd.push(full);
-                else if (entry.endsWith('.md'))
+                }
+                else if (entry.endsWith('.md')) {
                     legacyMd.push(full);
+                }
             }
             catch { }
         }
@@ -136,7 +153,10 @@ function parseYaml(yaml) {
         const [, key, raw] = m;
         const v = raw.trim();
         if (v.startsWith('[') && v.endsWith(']')) {
-            out[key] = v.slice(1, -1).split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '').toLowerCase()).filter(Boolean);
+            out[key] = v.slice(1, -1)
+                .split(',')
+                .map(s => s.trim().replace(/^['"]|['"]$/g, '').toLowerCase())
+                .filter(Boolean);
         }
         else {
             out[key] = v.replace(/^['"]|['"]$/g, '');
@@ -144,19 +164,84 @@ function parseYaml(yaml) {
     }
     return out;
 }
-const STOP = new Set(['the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'for', 'is', 'it', 'be', 'use', 'using', 'get', 'set', 'run', 'make', 'how', 'do', 'with', 'що', 'як', 'для', 'та', 'і', 'або', 'з', 'у', 'в', 'це', 'на', 'до', 'по', 'при', 'цей', 'цього', 'цьому', 'цим', 'ця', 'цієї', 'цю', 'цієї', 'який', 'яка', 'яке', 'які', 'якого', 'якій', 'яким', 'мені', 'мене', 'мій', 'моя', 'моє', 'мої', 'мого']);
+const STOP = new Set([
+    'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'for', 'is', 'it', 'be',
+    'use', 'using', 'get', 'set', 'run', 'make', 'how', 'do', 'with',
+    'що', 'як', 'для', 'та', 'і', 'або', 'з', 'у', 'в', 'це', 'на', 'до', 'по', 'при',
+    'цей', 'цього', 'цьому', 'цим', 'ця', 'цієї', 'цю', 'цієї',
+    'який', 'яка', 'яке', 'які', 'якого', 'якій', 'яким',
+    'мені', 'мене', 'мій', 'моя', 'моє', 'мої', 'мого',
+]);
 const UA_EN = {
-    'поясни': ['explain', 'describe', 'overview'], 'опиши': ['describe', 'overview', 'explain'], 'проаналізуй': ['analyze', 'analysis', 'review'], 'перевір': ['check', 'verify', 'validate', 'review'], 'виправ': ['fix', 'debug', 'repair'], 'налагодь': ['debug', 'troubleshoot'], 'оптимізуй': ['optimize', 'performance', 'refactor'], 'рефактор': ['refactor', 'clean', 'restructure'], 'задокументуй': ['document', 'documentation', 'docs'], 'документацію': ['documentation', 'docs', 'readme'], 'напиши': ['write', 'create', 'implement'], 'створи': ['create', 'build', 'implement'], 'додай': ['add', 'implement', 'create'], 'видали': ['delete', 'remove'], 'встанови': ['install', 'setup', 'configure'], 'налаштуй': ['configure', 'setup', 'settings'], 'запусти': ['run', 'execute', 'start'], 'розгорни': ['deploy', 'deployment'], 'протестуй': ['test', 'testing'], 'структуру': ['structure', 'architecture', 'overview', 'project'], 'архітектуру': ['architecture', 'structure', 'design'], 'проєкту': ['project', 'codebase', 'repository'], 'код': ['code', 'source'], 'базу': ['database', 'base'], 'сервер': ['server', 'backend'], 'бекенд': ['backend', 'server', 'api'], 'фронтенд': ['frontend', 'client', 'ui'], 'апі': ['api', 'rest', 'endpoint'], 'безпека': ['security', 'auth', 'authentication'], 'тести': ['tests', 'testing', 'unit-test'], 'логи': ['logs', 'logging', 'monitoring'], 'помилка': ['error', 'bug', 'exception'],
+    'поясни': ['explain', 'describe', 'overview'],
+    'поясніть': ['explain', 'describe'],
+    'опиши': ['describe', 'overview', 'explain'],
+    'опишіть': ['describe', 'overview'],
+    'проаналізуй': ['analyze', 'analysis', 'review'],
+    'перевір': ['check', 'verify', 'validate', 'review'],
+    'виправ': ['fix', 'debug', 'repair'],
+    'налагодь': ['debug', 'troubleshoot'],
+    'оптимізуй': ['optimize', 'performance', 'refactor'],
+    'рефактор': ['refactor', 'clean', 'restructure'],
+    'задокументуй': ['document', 'documentation', 'docs'],
+    'документацію': ['documentation', 'docs', 'readme'],
+    'напиши': ['write', 'create', 'implement'],
+    'створи': ['create', 'build', 'implement'],
+    'додай': ['add', 'implement', 'create'],
+    'видали': ['delete', 'remove'],
+    'встанови': ['install', 'setup', 'configure'],
+    'налаштуй': ['configure', 'setup', 'settings'],
+    'запусти': ['run', 'execute', 'start'],
+    'розгорни': ['deploy', 'deployment'],
+    'протестуй': ['test', 'testing'],
+    'відлагодь': ['debug', 'troubleshoot'],
+    'структуру': ['structure', 'architecture', 'overview', 'project'],
+    'структура': ['structure', 'architecture', 'project'],
+    'архітектуру': ['architecture', 'structure', 'design'],
+    'архітектура': ['architecture', 'design'],
+    'проєкту': ['project', 'codebase', 'repository'],
+    'проект': ['project', 'codebase'],
+    'проекту': ['project', 'codebase', 'repository'],
+    'код': ['code', 'source'],
+    'кодову': ['codebase', 'code'],
+    'базу': ['database', 'base'],
+    'бази': ['database'],
+    'сервер': ['server', 'backend'],
+    'сервера': ['server', 'backend'],
+    'бекенд': ['backend', 'server', 'api'],
+    'фронтенд': ['frontend', 'client', 'ui'],
+    'апі': ['api', 'rest', 'endpoint'],
+    'ендпоінти': ['endpoint', 'api', 'routes'],
+    'маршрути': ['routes', 'routing', 'endpoint'],
+    'модулі': ['modules', 'components'],
+    'компоненти': ['components', 'modules'],
+    'безпека': ['security', 'auth', 'authentication'],
+    'авторизація': ['authorization', 'auth', 'access'],
+    'автентифікація': ['authentication', 'auth', 'login'],
+    'тести': ['tests', 'testing', 'unit-test'],
+    'логи': ['logs', 'logging', 'monitoring'],
+    'деплой': ['deploy', 'deployment', 'ci-cd'],
+    'конфігурація': ['configuration', 'config', 'settings'],
+    'залежності': ['dependencies', 'packages', 'requirements'],
+    'помилки': ['errors', 'exceptions', 'debugging'],
+    'помилка': ['error', 'bug', 'exception'],
 };
 function expandWithTranslations(tokens) {
     const expanded = new Set(tokens);
-    for (const token of tokens)
-        if (UA_EN[token])
-            UA_EN[token].forEach(t => expanded.add(t));
+    for (const token of tokens) {
+        const translations = UA_EN[token];
+        if (translations) {
+            translations.forEach(t => expanded.add(t));
+        }
+    }
     return Array.from(expanded);
 }
 function tokenize(text) {
-    return text.toLowerCase().replace(/[-_]/g, ' ').split(/[\s,;:.!?()\[\]{}<>|"'`]+/).filter(w => w.length > 2 && !STOP.has(w));
+    return text
+        .toLowerCase()
+        .replace(/[-_]/g, ' ')
+        .split(/[\s,;:.!?()\[\]{}<>|"'`]+/)
+        .filter(w => w.length > 2 && !STOP.has(w));
 }
 let _idfCache = null;
 let _idfSkillsPath = '';
@@ -172,7 +257,12 @@ function buildIdfCache(skillsPath) {
         if (!yaml)
             continue;
         const p = parseYaml(yaml);
-        const words = new Set([...tokenize(String(p['name'] || '')), ...tokenize(String(p['description'] || '')), ...tokenize(String(p['domain'] || '')), ...(Array.isArray(p['tags']) ? p['tags'].flatMap((t) => tokenize(t)) : [])]);
+        const words = new Set([
+            ...tokenize(String(p['name'] || '')),
+            ...tokenize(String(p['description'] || '')),
+            ...tokenize(String(p['domain'] || '')),
+            ...(Array.isArray(p['tags']) ? p['tags'].flatMap((t) => tokenize(t)) : []),
+        ]);
         words.forEach(w => docFreq.set(w, (docFreq.get(w) ?? 0) + 1));
     }
     const N = files.length;
@@ -190,18 +280,23 @@ function buildIdfCache(skillsPath) {
     });
     _idfCache = cache;
     _idfSkillsPath = skillsPath;
+    client_1.oogLogger.appendLine(`[Skills] IDF побудовано: ${N} скілів, ${cache.size} унікальних токенів`);
     return cache;
 }
-function idfWeight(token, idf) { return idf.get(token) ?? 1.0; }
+function idfWeight(token, idf) {
+    return idf.get(token) ?? 1.0;
+}
 function splitTaskAndContext(combined) {
     const lines = combined.split('\n');
-    const ctxMarkers = ['Key deps:', 'Project:', 'Scripts:', 'Active file:', 'Selected code:', 'WORKSPACE'];
+    const ctxMarkers = ['Key deps:', 'key deps:', 'Project:', 'Scripts:', 'Active file:',
+        'Selected code:', 'WORKSPACE', 'deps:', 'dependencies:'];
     let ctxStart = lines.length;
-    for (let i = 0; i < lines.length; i++)
+    for (let i = 0; i < lines.length; i++) {
         if (ctxMarkers.some(m => lines[i].startsWith(m))) {
             ctxStart = i;
             break;
         }
+    }
     const taskText = lines.slice(0, ctxStart).join('\n');
     const contextText = lines.slice(ctxStart).join('\n');
     const taskRaw = extractQueryTokens(taskText);
@@ -259,7 +354,13 @@ function scoreSkill(meta, taskTokens) {
     return score;
 }
 function extractQueryTokens(text) {
-    const cleaned = text.slice(0, 4096).replace(/[A-Za-z]:\\[\w\\.\ \-]*/g, ' ').replace(/\/[\w\/.\-]+/g, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/\b\d{2,}\b/g, ' ').replace(/[^\w\s]/g, ' ');
+    const cleaned = text
+        .slice(0, 4096)
+        .replace(/[A-Za-z]:\\[\w\\.\ \-]*/g, ' ')
+        .replace(/\/[\w\/.\-]+/g, ' ')
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/\b\d{2,}\b/g, ' ')
+        .replace(/[^\w\s]/g, ' ');
     return [...new Set(tokenize(cleaned))];
 }
 function scanAndScoreAllSkillsIdf(combined, alreadyLoaded = new Set(), minScore = 4) {
@@ -273,6 +374,8 @@ function scanAndScoreAllSkillsIdf(combined, alreadyLoaded = new Set(), minScore 
     const { taskTokens, contextTokens } = splitTaskAndContext(combined);
     if (taskTokens.length === 0 && contextTokens.length === 0)
         return [];
+    client_1.oogLogger.appendLine(`[Skills] Task tokens: [${taskTokens.slice(0, 10).join(', ')}]` +
+        (contextTokens.length > 0 ? `  Context tokens: [${contextTokens.slice(0, 8).join(', ')}]` : ''));
     const scored = [];
     for (const filePath of files) {
         const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
@@ -282,10 +385,22 @@ function scanAndScoreAllSkillsIdf(combined, alreadyLoaded = new Set(), minScore 
         let meta;
         if (yaml) {
             const p = parseYaml(yaml);
-            meta = { filePath, folderName, name: String(p['name'] || folderName), description: String(p['description'] || ''), domain: String(p['domain'] || ''), subdomain: String(p['subdomain'] || ''), tags: Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName), score: 0 };
+            meta = {
+                filePath, folderName,
+                name: String(p['name'] || folderName),
+                description: String(p['description'] || ''),
+                domain: String(p['domain'] || ''),
+                subdomain: String(p['subdomain'] || ''),
+                tags: Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
+                score: 0,
+            };
         }
         else {
-            meta = { filePath, folderName, name: folderName, description: '', domain: '', subdomain: '', tags: tokenize(folderName), score: 0 };
+            meta = {
+                filePath, folderName,
+                name: folderName, description: '', domain: '', subdomain: '',
+                tags: tokenize(folderName), score: 0,
+            };
         }
         meta.score = scoreSkillIdf(meta, taskTokens, contextTokens, idf);
         if (meta.score >= minScore)
@@ -308,10 +423,22 @@ function scanAndScoreAllSkills(queryTokens, alreadyLoaded = new Set(), minScore 
         let meta;
         if (yaml) {
             const p = parseYaml(yaml);
-            meta = { filePath, folderName, name: String(p['name'] || folderName), description: String(p['description'] || ''), domain: String(p['domain'] || ''), subdomain: String(p['subdomain'] || ''), tags: Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName), score: 0 };
+            meta = {
+                filePath, folderName,
+                name: String(p['name'] || folderName),
+                description: String(p['description'] || ''),
+                domain: String(p['domain'] || ''),
+                subdomain: String(p['subdomain'] || ''),
+                tags: Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
+                score: 0,
+            };
         }
         else {
-            meta = { filePath, folderName, name: folderName, description: '', domain: '', subdomain: '', tags: tokenize(folderName), score: 0 };
+            meta = {
+                filePath, folderName,
+                name: folderName, description: '', domain: '', subdomain: '',
+                tags: tokenize(folderName), score: 0,
+            };
         }
         meta.score = scoreSkill(meta, queryTokens);
         if (meta.score >= minScore)
@@ -326,6 +453,7 @@ function loadTopSkills(scored, maxSkills) {
         try {
             const content = fs.readFileSync(meta.filePath, 'utf8');
             loaded.push({ ...meta, content });
+            client_1.oogLogger.appendLine(`[Skills] ✅ "${meta.name}"  folder=${meta.folderName}  score=${meta.score.toFixed(2)}`);
         }
         catch (e) {
             client_1.oogLogger.appendLine(`[Skills] ⚠️  ${meta.folderName}: ${e.message}`);
@@ -339,6 +467,7 @@ async function autoLoadSkillsForTask(task, workspaceContext = '', maxSkills = 3)
         return [];
     const allScored = scanAndScoreAllSkillsIdf(combined, new Set(), 4);
     if (allScored.length === 0) {
+        client_1.oogLogger.appendLine('[Skills] minScore=4 нічого не дав → fallback minScore=2');
         const fallback = scanAndScoreAllSkillsIdf(combined, new Set(), 2);
         return loadTopSkills(fallback, maxSkills);
     }
@@ -354,13 +483,15 @@ async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNe
     let contextTokens = extractQueryTokens(content);
     if (contextTokens.length < 3)
         return empty;
+    client_1.oogLogger.appendLine(`[Skills] Контекст з ${toolName}: tokens=[${contextTokens.slice(0, 10).join(', ')}]`);
     const newScored = scanAndScoreAllSkills(contextTokens, alreadyLoaded, minScore);
     return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
 function getPerplexicaUrl() {
-    return vscode.workspace.getConfiguration('openollamagravity').get('perplexicaUrl', 'http://10.1.0.138:3030');
+    return vscode.workspace
+        .getConfiguration('openollamagravity')
+        .get('perplexicaUrl', '[http://10.1.0.138:3030](http://10.1.0.138:3030)');
 }
-/** 🌐 WEB SEARCH через Perplexica */
 /** 🌐 WEB SEARCH через Perplexica */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
@@ -375,7 +506,7 @@ async function webSearch(args) {
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
     client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
-    // ДИНАМІЧНО отримуємо поточну модель (напр. gemma3n:latest)
+    // ДИНАМІЧНО отримуємо поточну модель
     const activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
     return new Promise((promiseResolve) => {
         try {
@@ -384,7 +515,7 @@ async function webSearch(args) {
             const bodyData = JSON.stringify({
                 query,
                 focusMode: args.focusMode || 'webSearch',
-                sources: ['web'],
+                sources: ['web'], // Обов'язково
                 optimizationMode: 'speed',
                 history: [],
                 chatModel: {
@@ -393,7 +524,7 @@ async function webSearch(args) {
                 },
                 embeddingModel: {
                     provider: 'ollama',
-                    model: 'bge-m3:latest' // <--- ВКАЗАНО ВАШУ EMBEDDING-МОДЕЛЬ
+                    model: 'bge-m3:latest'
                 }
             });
             const req = lib.request(url, {
@@ -450,30 +581,6 @@ async function webSearch(args) {
         }
     });
 }
-async function checkPerplexica(baseUrl) {
-    return new Promise(resolve => {
-        const url = new URL('/api/config', baseUrl);
-        const lib = url.protocol === 'https:' ? https : http;
-        const req = lib.get({ hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3030), path: url.pathname, timeout: 3000 }, (res) => { resolve(res.statusCode < 500); });
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => { req.destroy(); resolve(false); });
-    });
-}
-function httpPost(urlStr, body) {
-    return new Promise((resolve, reject) => {
-        const url = new URL(urlStr);
-        const lib = url.protocol === 'https:' ? https : http;
-        const req = lib.request({ hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3030), path: url.pathname + (url.search || ''), method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 30000 }, (res) => {
-            let data = '';
-            res.on('data', (c) => { data += c.toString(); });
-            res.on('end', () => resolve(data));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Perplexica timeout')); });
-        req.write(body);
-        req.end();
-    });
-}
 function resolvePath(p) {
     if (!p)
         throw new Error('Path is required but received undefined.');
@@ -485,21 +592,23 @@ async function readFile(args) {
     try {
         const abs = resolvePath(args.path);
         const stat = fs.statSync(abs);
-        if (stat.isDirectory()) {
-            return { ok: false, output: `Помилка: "${args.path}" є папкою (директорією). Щоб переглянути вміст папки, використовуйте list_files.` };
-        }
         if (stat.size > READ_FILE_MAX_BYTES) {
             const fd = fs.openSync(abs, 'r');
             const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
             const n = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
             fs.closeSync(fd);
             const preview = buf.subarray(0, n).toString('utf8');
-            return { ok: true, output: preview + `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB. Use specific line ranges if you need more.]` };
+            return {
+                ok: true,
+                output: preview +
+                    `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
+                    ` Use specific line ranges if you need more.]`,
+            };
         }
         return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     }
     catch (e) {
-        return { ok: false, output: `Помилка читання файлу: ${e.message}` };
+        return { ok: false, output: e.message };
     }
 }
 async function writeFile(args, onConfirm) {
@@ -566,11 +675,19 @@ async function runTerminal(args, onConfirm) {
             return { ok: false, output: 'No command.' };
         if (!await onConfirm(args.command))
             return { ok: false, output: 'Rejected.' };
-        const cwd = args.cwd ? resolvePath(args.cwd) : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '');
+        const cwd = args.cwd
+            ? resolvePath(args.cwd)
+            : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '');
         return new Promise((resolve) => {
             cp.exec(args.command, { cwd, timeout: 60000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-                const out = (stdout || '') + (stderr ? `\n[stderr]:\n${stderr}` : '');
-                resolve({ ok: !err, output: out || (err ? err.message : '(no output)') });
+                if (err) {
+                    const out = (stdout || '') + (stderr ? `\n[stderr]:\n${stderr}` : '');
+                    resolve({ ok: false, output: out || err.message });
+                }
+                else {
+                    const out = stdout + (stderr ? `\n[stderr]:\n${stderr}` : '');
+                    resolve({ ok: true, output: out || '(no output)' });
+                }
             });
         });
     }
@@ -607,18 +724,18 @@ async function deleteFile(args, onConfirm) {
 }
 async function editFile(args, onConfirm) {
     try {
-        if (!args.path || args.start_line === undefined || args.end_line === undefined || args.new_content === undefined)
-            return { ok: false, output: 'Missing arguments.' };
-        const abs = resolvePath(args.path);
-        const stat = fs.statSync(abs);
-        if (stat.isDirectory()) {
-            return { ok: false, output: `Помилка: "${args.path}" є папкою. edit_file працює лише з окремими файлами.` };
+        if (!args.path || args.start_line === undefined || args.end_line === undefined || args.new_content === undefined) {
+            return { ok: false, output: 'Missing path, start_line, end_line, or new_content' };
         }
+        const abs = resolvePath(args.path);
+        if (!fs.existsSync(abs))
+            return { ok: false, output: 'File not found.' };
         const content = fs.readFileSync(abs, 'utf8');
         const lines = content.split('\n');
         const start = Math.max(1, Number(args.start_line)) - 1;
         const end = Math.min(lines.length, Number(args.end_line));
-        const diff = `--- OLD\n+++ NEW\n-${lines.slice(start, end).join('\n')}\n+${args.new_content}`;
+        const oldLines = lines.slice(start, end).join('\n');
+        const diff = `--- OLD\n+++ NEW\n-${oldLines}\n+${args.new_content}`;
         if (!await onConfirm(args.path, diff))
             return { ok: false, output: 'Rejected.' };
         lines.splice(start, end - start, args.new_content);
@@ -629,7 +746,6 @@ async function editFile(args, onConfirm) {
         return { ok: false, output: e.message };
     }
 }
-/** ⚡ ОНОВЛЕНИЙ ШВИДКИЙ ПОШУК — Не блокує редактор, використовує Native API */
 async function searchFiles(args) {
     try {
         if (!args.pattern)
@@ -676,16 +792,19 @@ async function getDiagnostics(args) {
         const diags = vscode.languages.getDiagnostics();
         const result = [];
         for (const [uri, fileDiags] of diags) {
-            if (fileDiags.length === 0 || (filterPath && uri.fsPath !== filterPath))
+            if (fileDiags.length === 0)
+                continue;
+            if (filterPath && uri.fsPath !== filterPath)
                 continue;
             const relPath = path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', uri.fsPath);
             result.push(`=== ${relPath} ===`);
             for (const d of fileDiags) {
-                const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' : d.severity === vscode.DiagnosticSeverity.Warning ? 'WARN' : 'INFO';
+                const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' :
+                    d.severity === vscode.DiagnosticSeverity.Warning ? 'WARN' : 'INFO';
                 result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'uknown'})`);
             }
         }
-        return { ok: true, output: result.length > 0 ? result.join('\n') : 'No diagnostics found.' };
+        return { ok: true, output: result.length > 0 ? result.join('\n') : 'No diagnostics found. Everything looks clean!' };
     }
     catch (e) {
         return { ok: false, output: e.message };
@@ -696,20 +815,26 @@ async function getFileOutline(args) {
         if (!args.path)
             return { ok: false, output: 'Missing path.' };
         const abs = resolvePath(args.path);
-        const stat = fs.statSync(abs);
-        if (stat.isDirectory()) {
-            return { ok: false, output: `Помилка: "${args.path}" є папкою. get_file_outline працює лише з файлами.` };
+        // Жорсткий захист від папок
+        if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
+            return {
+                ok: false,
+                output: `CRITICAL ERROR: "${args.path}" is a DIRECTORY. You CANNOT use get_file_outline on directories! FIX: Use the "list_files" tool first to find specific .ts/.js files, and then call "get_file_outline" on those specific files.`
+            };
         }
         const uri = vscode.Uri.file(abs);
         const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
-        if (!symbols || symbols.length === 0)
-            return { ok: true, output: 'No Document Symbols found.' };
+        if (!symbols || symbols.length === 0) {
+            return { ok: true, output: 'No Document Symbols found or not supported for this file type yet.' };
+        }
         const lines = [];
         function printSymbols(syms, indent) {
             for (const s of syms) {
-                lines.push(`${indent}[${vscode.SymbolKind[s.kind] || 'Unknown'}] ${s.name} (Lines ${s.range.start.line + 1}-${s.range.end.line + 1})`);
-                if (s.children && s.children.length > 0)
+                const kind = vscode.SymbolKind[s.kind] || 'Unknown';
+                lines.push(`${indent}[${kind}] ${s.name} (Lines ${s.range.start.line + 1}-${s.range.end.line + 1})`);
+                if (s.children && s.children.length > 0) {
                     printSymbols(s.children, indent + '  ');
+                }
             }
         }
         printSymbols(symbols, '');
@@ -721,26 +846,32 @@ async function getFileOutline(args) {
 }
 async function getWorkspaceInfo(args) {
     try {
-        const root = args?.path ? path.resolve(args.path) : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const root = args?.path
+            ? path.resolve(args.path)
+            : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!root)
-            return { ok: false, output: 'No workspace opened.' };
+            return { ok: false, output: 'No path specified and no active workspace.' };
         const pkgPath = path.join(root, 'package.json');
         let out = `Resolved path: ${root}\n`;
         if (fs.existsSync(pkgPath)) {
             try {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                out += `Project: ${pkg.name || 'Unknown'}\nScripts: ${Object.keys(pkg.scripts || {}).join(', ')}\n`;
+                out += `Project: ${pkg.name || 'Unknown'}\n`;
+                out += `Scripts: ${Object.keys(pkg.scripts || {}).join(', ')}\n`;
                 const deps = Object.keys(pkg.dependencies || {});
                 const devDeps = Object.keys(pkg.devDependencies || {});
-                out += `Deps: ${deps.slice(0, 15).join(', ')}${deps.length > 15 ? '...' : ''}\nDevDeps: ${devDeps.slice(0, 15).join(', ')}${devDeps.length > 15 ? '...' : ''}\n`;
+                out += `Deps: ${deps.slice(0, 15).join(', ')}${deps.length > 15 ? '...' : ''}\n`;
+                out += `DevDeps: ${devDeps.slice(0, 15).join(', ')}${devDeps.length > 15 ? '...' : ''}\n`;
             }
             catch (e) {
-                out += `[Warning] parse failed: ${e.message}\n`;
+                out += `[Warning] Found package.json but failed to parse: ${e.message}\n`;
             }
         }
-        else
-            out += `[Warning] No package.json found.\n`;
-        return { ok: true, output: out + `\nTo see directory structure, use list_files.` };
+        else {
+            out += `[Warning] No package.json found at this path.\n`;
+        }
+        out += `\nTo see directory structure, use list_files.`;
+        return { ok: true, output: out };
     }
     catch (e) {
         return { ok: false, output: e.message };
@@ -748,22 +879,32 @@ async function getWorkspaceInfo(args) {
 }
 async function listSkills() {
     const sp = getSkillsPath();
-    if (!sp || !fs.existsSync(sp))
-        return { ok: false, output: 'Skills path not found.' };
+    if (!sp || !fs.existsSync(sp)) {
+        return { ok: false, output: 'Skills path not found. Check openollamagravity.skillsPath.' };
+    }
     const files = scanSkillFolders(sp);
-    if (files.length === 0)
-        return { ok: false, output: 'No SKILL.md files found.' };
+    if (files.length === 0) {
+        return { ok: false, output: 'No SKILL.md files found. Run: openollamagravity.syncSkills' };
+    }
     const entries = [];
     for (const file of files) {
         const folderName = path.relative(sp, path.dirname(file)).replace(/\\/g, '/');
         const yaml = readFrontmatter(file);
-        entries.push(`---\n${yaml ? `${yaml}\nskill_path: ${folderName}` : `name: ${folderName}\nskill_path: ${folderName}`}\n---`);
+        const body = yaml
+            ? `${yaml}\nskill_path: ${folderName}`
+            : `name: ${folderName}\nskill_path: ${folderName}`;
+        entries.push(`---\n${body}\n---`);
     }
-    return { ok: true, output: `# SKILLS INDEX\n# Load full skill: read_skill {"name": "<skill_path>"}\n\n${entries.join('\n\n')}` };
+    return {
+        ok: true,
+        output: `# SKILLS INDEX — ${entries.length} skills (frontmatter only)\n` +
+            `# Load full skill: read_skill {"name": "<skill_path>"}\n\n` +
+            entries.join('\n\n'),
+    };
 }
 async function readSkill(args) {
     if (!args.name)
-        return { ok: false, output: 'Вкажіть "name".' };
+        return { ok: false, output: 'Вкажіть "name" (назву папки скіла).' };
     const sp = getSkillsPath();
     if (!sp)
         return { ok: false, output: 'Skills path not configured.' };
@@ -782,8 +923,12 @@ async function readSkill(args) {
         const rel = path.relative(sp, path.dirname(f)).replace(/\\/g, '/').toLowerCase();
         return rel === needle || rel.includes(needle) || path.basename(rel).includes(needle);
     });
-    if (!match)
-        return { ok: false, output: `Skill "${args.name}" not found.` };
+    if (!match) {
+        return {
+            ok: false,
+            output: `Skill "${args.name}" not found. Use list_skills to see available skill_path values.`,
+        };
+    }
     try {
         return { ok: true, output: fs.readFileSync(match, 'utf8') };
     }
