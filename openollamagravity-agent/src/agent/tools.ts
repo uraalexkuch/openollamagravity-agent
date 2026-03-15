@@ -268,6 +268,9 @@ function getPerplexicaUrl(): string {
 /** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
+  // Sanitize query: replace @, #, $ with spaces to prevent server-side 500 errors
+  query = query.replace(/[@#$]/g, ' ');
+
   let website = args?.website || args?.domain;
   if (website) {
     // Strip http://, https://, and trailing slashes
