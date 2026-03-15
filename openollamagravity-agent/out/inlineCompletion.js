@@ -46,7 +46,7 @@ class InlineCompletionProvider {
         const cfg = vscode.workspace.getConfiguration('openollamagravity');
         if (!cfg.get('inlineCompletionEnabled', true))
             return;
-        // ── Скасування попереднього запиту на рівні HTTP та Таймера ──
+        // ── Скасування попереднього запиту ──
         if (this._abortController) {
             this._abortController.abort();
         }
@@ -81,10 +81,10 @@ class InlineCompletionProvider {
         const id = ++this._reqId;
         const prompt = buildPrompt(document.languageId, prefix, suffix);
         const maxTokens = cfg.get('maxTokens', 4096);
-        // Створюємо новий контролер та підв'язуємо до скасування від VS Code
+        // Створюємо новий контролер та підв'язуємо скасування від VS Code
         this._abortController = new AbortController();
         token.onCancellationRequested(() => this._abortController?.abort());
-        // Передаємо signal в generate для можливості миттєвого обриву генерації
+        // Передаємо signal в generate
         const suggestion = await this.ollama
             .generate(prompt, Math.min(maxTokens, 256), undefined, this._abortController.signal)
             .catch(() => '');
@@ -102,21 +102,32 @@ class InlineCompletionProvider {
 }
 exports.InlineCompletionProvider = InlineCompletionProvider;
 function buildPrompt(lang, prefix, suffix) {
-    return `<|fim_prefix|>// Language: ${lang}\n${prefix}<|fim_suffix|>${suffix}<|fim_middle|>`;
+    return (`<|fim_prefix|>` +
+        `// Language: ${lang}\n` +
+        prefix +
+        `<|fim_suffix|>` +
+        suffix +
+        `<|fim_middle|>`);
 }
 function cleanSuggestion(raw, prefix) {
-    let s = raw.replace(/<\|fim_prefix\|>/g, '').replace(/<\|fim_suffix\|>/g, '')
-        .replace(/<\|fim_middle\|>/g, '').replace(/<\|endoftext\|>/g, '');
-    if (s.startsWith(prefix))
+    let s = raw;
+    s = s
+        .replace(/<\|fim_prefix\|>/g, '')
+        .replace(/<\|fim_suffix\|>/g, '')
+        .replace(/<\|fim_middle\|>/g, '')
+        .replace(/<\|endoftext\|>/g, '');
+    if (s.startsWith(prefix)) {
         s = s.slice(prefix.length);
+    }
     const prefixLines = prefix.split('\n');
     const lastPrefixLine = prefixLines[prefixLines.length - 1];
     if (lastPrefixLine.trim() !== '' && s.includes('\n')) {
         const firstNewline = s.indexOf('\n');
         const firstLine = s.substring(0, firstNewline).trim();
         const opensBlock = firstLine.endsWith('{') || firstLine.endsWith('(') || firstLine.endsWith('[') || firstLine.endsWith(':');
-        if (!opensBlock)
+        if (!opensBlock) {
             s = s.substring(0, firstNewline);
+        }
     }
     return s.trimEnd();
 }
