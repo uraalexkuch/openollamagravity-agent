@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as cp from 'child_process';
 import { oogLogger } from '../ollama/client';
+import * as http from 'http';
+import * as https from 'https';
 
 export interface ToolResult { ok: boolean; output: string; }
 
@@ -128,35 +130,117 @@ const STOP = new Set([
   'the','a','an','in','on','at','to','of','and','or','for','is','it','be',
   'use','using','get','set','run','make','how','do','with',
   'що','як','для','та','і','або','з','у','в','це','на','до','по','при',
+  'цей','цього','цьому','цим','ця','цієї','цю','цієї',
+  'який','яка','яке','які','якого','якій','яким',
+  'мені','мене','мій','моя','моє','мої','мого',
 ]);
+
+/**
+ * Словник перекладу UA→EN для частих слів у задачах.
+ * Забезпечує збіг українських запитів з англійськими тегами скілів.
+ */
+const UA_EN: Record<string, string[]> = {
+  // Загальні дії
+  'поясни':     ['explain', 'describe', 'overview'],
+  'поясніть':   ['explain', 'describe'],
+  'опиши':      ['describe', 'overview', 'explain'],
+  'опишіть':    ['describe', 'overview'],
+  'проаналізуй':['analyze', 'analysis', 'review'],
+  'перевір':    ['check', 'verify', 'validate', 'review'],
+  'виправ':     ['fix', 'debug', 'repair'],
+  'налагодь':   ['debug', 'troubleshoot'],
+  'оптимізуй':  ['optimize', 'performance', 'refactor'],
+  'рефактор':   ['refactor', 'clean', 'restructure'],
+  'задокументуй':['document', 'documentation', 'docs'],
+  'документацію':['documentation', 'docs', 'readme'],
+  'напиши':     ['write', 'create', 'implement'],
+  'створи':     ['create', 'build', 'implement'],
+  'додай':      ['add', 'implement', 'create'],
+  'видали':     ['delete', 'remove'],
+  'встанови':   ['install', 'setup', 'configure'],
+  'налаштуй':   ['configure', 'setup', 'settings'],
+  'запусти':    ['run', 'execute', 'start'],
+  'розгорни':   ['deploy', 'deployment'],
+  'протестуй':  ['test', 'testing'],
+  'відлагодь':  ['debug', 'troubleshoot'],
+  // Структура та архітектура
+  'структуру':  ['structure', 'architecture', 'overview', 'project'],
+  'структура':  ['structure', 'architecture', 'project'],
+  'архітектуру':['architecture', 'structure', 'design'],
+  'архітектура':['architecture', 'design'],
+  'проєкту':    ['project', 'codebase', 'repository'],
+  'проект':     ['project', 'codebase'],
+  'проекту':    ['project', 'codebase', 'repository'],
+  'код':        ['code', 'source'],
+  'кодову':     ['codebase', 'code'],
+  'базу':       ['database', 'base'],
+  'бази':       ['database'],
+  'сервер':     ['server', 'backend'],
+  'сервера':    ['server', 'backend'],
+  'бекенд':     ['backend', 'server', 'api'],
+  'фронтенд':   ['frontend', 'client', 'ui'],
+  'апі':        ['api', 'rest', 'endpoint'],
+  'ендпоінти':  ['endpoint', 'api', 'routes'],
+  'маршрути':   ['routes', 'routing', 'endpoint'],
+  'модулі':     ['modules', 'components'],
+  'компоненти': ['components', 'modules'],
+  // Технології
+  'безпека':    ['security', 'auth', 'authentication'],
+  'авторизація':['authorization', 'auth', 'access'],
+  'автентифікація':['authentication', 'auth', 'login'],
+  'тести':      ['tests', 'testing', 'unit-test'],
+  'логи':       ['logs', 'logging', 'monitoring'],
+  'деплой':     ['deploy', 'deployment', 'ci-cd'],
+  'конфігурація':['configuration', 'config', 'settings'],
+  'залежності': ['dependencies', 'packages', 'requirements'],
+  'помилки':    ['errors', 'exceptions', 'debugging'],
+  'помилка':    ['error', 'bug', 'exception'],
+};
+
+/** Розширює масив токенів англійськими перекладами для UA слів */
+function expandWithTranslations(tokens: string[]): string[] {
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    const translations = UA_EN[token];
+    if (translations) {
+      translations.forEach(t => expanded.add(t));
+    }
+  }
+  return Array.from(expanded);
+}
 
 function tokenize(text: string): string[] {
   return text
       .toLowerCase()
-      .replace(/[-_]/g, ' ')          // дефіси → пробіли (для "skill-smith" → "skill smith")
+      .replace(/[-_]/g, ' ')
       .split(/[\s,;:.!?()\[\]{}<>|"'`]+/)
       .filter(w => w.length > 2 && !STOP.has(w));
 }
 
 /**
  * Рахує score скіла відносно токенів задачі.
- *   tags       → ×3  (найточніший сигнал)
+ * Токени задачі автоматично розширюються англійськими перекладами UA-слів.
+ *   tags       → ×3
  *   description→ ×2
  *   name/folder→ ×1
  *   domain     → ×1
  */
 function scoreSkill(meta: SkillMeta, taskTokens: string[]): number {
   if (taskTokens.length === 0) return 0;
+
+  // Розширюємо токени задачі перекладами — щоб "структуру" знаходила "structure"
+  const queryTokens = expandWithTranslations(taskTokens);
+
   const nameT   = tokenize(meta.name + ' ' + meta.folderName);
   const descT   = tokenize(meta.description);
   const domainT = tokenize(meta.domain + ' ' + meta.subdomain);
 
   let score = 0;
-  for (const tw of taskTokens) {
-    if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))          score += 3;
-    else if (descT.some(d => d === tw || d.includes(tw) || tw.includes(d)))         score += 2;
-    else if (nameT.some(n => n === tw || n.includes(tw) || tw.includes(n)))         score += 1;
-    else if (domainT.some(d => d.length > 2 && (d.includes(tw) || tw.includes(d)))) score += 1;
+  for (const tw of queryTokens) {
+    if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))           score += 3;
+    else if (descT.some(d => d === tw || d.includes(tw) || tw.includes(d)))          score += 2;
+    else if (nameT.some(n => n === tw || n.includes(tw) || tw.includes(n)))          score += 1;
+    else if (domainT.some(d => d.length > 2 && (d.includes(tw) || tw.includes(d))))  score += 1;
   }
   return score;
 }
@@ -260,19 +344,24 @@ function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
 /**
  * Викликається ПЕРЕД запуском агента.
  * Перевіряє ВСІ скіли і завантажує топ-N найрелевантніших.
- * Той самий pipeline що й discoverSkillsFromContext.
  *
- * @param task      текст задачі від користувача
- * @param maxSkills максимум скілів у системному промпті (default: 3)
+ * @param task             текст задачі від користувача
+ * @param workspaceContext додатковий контекст (package.json, активний файл тощо)
+ * @param maxSkills        максимум скілів у системному промпті (default: 3)
  */
 export async function autoLoadSkillsForTask(
     task: string,
+    workspaceContext = '',
     maxSkills = 3,
 ): Promise<LoadedSkill[]> {
-  const queryTokens = extractQueryTokens(task);
+  // Об'єднуємо задачу і контекст workspace — разом дають повнішу картину.
+  // Наприклад: задача "Поясни структуру" + контекст "Project: deep-search-backend, deps: fastapi, sqlalchemy"
+  // → токени ['deep', 'search', 'backend', 'fastapi', 'sqlalchemy'] → знаходять релевантні скіли
+  const combined    = [task, workspaceContext].filter(Boolean).join('\n');
+  const queryTokens = extractQueryTokens(combined);
   if (queryTokens.length === 0) return [];
 
-  oogLogger.appendLine(`[Skills] Аналіз задачі: tokens=[${queryTokens.slice(0, 12).join(', ')}]`);
+  oogLogger.appendLine(`[Skills] Аналіз задачі: tokens=[${queryTokens.slice(0, 15).join(', ')}]`);
 
   const allScored = scanAndScoreAllSkills(queryTokens, new Set(), 1);
 
@@ -438,7 +527,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
 async function checkPerplexica(baseUrl: string): Promise<boolean> {
   return new Promise(resolve => {
     const url = new URL('/api/config', baseUrl);
-    const lib = url.protocol === 'https:' ? require('https') : require('http');
+    const lib = url.protocol === 'https:' ? https : http;
     const req = lib.get(
         { hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3001), path: url.pathname, timeout: 3000 },
         (res: any) => { resolve(res.statusCode < 500); }
@@ -452,7 +541,7 @@ async function checkPerplexica(baseUrl: string): Promise<boolean> {
 function httpPost(urlStr: string, body: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
-    const lib = url.protocol === 'https:' ? require('https') : require('http');
+    const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(
         {
           hostname: url.hostname,
