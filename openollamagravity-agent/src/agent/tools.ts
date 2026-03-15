@@ -327,6 +327,154 @@ export async function discoverSkillsFromContext(
   return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
 
+// ── WEB SEARCH — Perplexica ──────────────────────────────────────────────────
+//
+// Perplexica — self-hosted AI search engine (https://github.com/ItzCrazyKns/Perplexica)
+// Налаштування: openollamagravity.perplexicaUrl (default: http://localhost:3001)
+//
+// Агент може викликати web_search коли задача потребує актуальних даних:
+//   - документація бібліотек
+//   - новини, релізи, CVE
+//   - вирішення помилок яких немає в скілах
+//
+// Перевіряємо доступність Perplexica перед викликом — якщо недоступний,
+// повертаємо чіткий опис помилки щоб агент не застрягав.
+
+export interface WebSearchResult {
+  title:   string;
+  url:     string;
+  snippet: string;
+}
+
+function getPerplexicaUrl(): string {
+  return vscode.workspace
+      .getConfiguration('openollamagravity')
+      .get<string>('perplexicaUrl', 'http://localhost:3001');
+}
+
+/**
+ * Виконує пошук через Perplexica API.
+ *
+ * Perplexica /api/search приймає:
+ *   { query, focusMode, optimizationMode }
+ *   focusMode: "webSearch" | "academicSearch" | "writingAssistant" | "wolframAlphaSearch"
+ *
+ * Повертає стислий текст результатів (title + snippet + url)
+ * — не повний HTML, щоб не переповнювати контекст LLM.
+ */
+export async function webSearch(args: any): Promise<ToolResult> {
+  const query = String(args?.query || '').trim();
+  if (!query) return { ok: false, output: 'web_search: вкажіть "query".' };
+
+  const baseUrl    = getPerplexicaUrl().replace(/\/$/, '');
+  const focusMode  = String(args?.focus  || 'webSearch');
+  const maxResults = Math.min(Number(args?.maxResults) || 5, 10);
+
+  oogLogger.appendLine(`[WebSearch] Запит: "${query}" (focus=${focusMode})`);
+
+  try {
+    // Перевіряємо чи Perplexica запущена
+    const isAvailable = await checkPerplexica(baseUrl);
+    if (!isAvailable) {
+      return {
+        ok: false,
+        output:
+            `Perplexica недоступна за адресою ${baseUrl}.\n` +
+            `Щоб увімкнути web_search:\n` +
+            `1. Запустіть Perplexica: https://github.com/ItzCrazyKns/Perplexica\n` +
+            `2. Або змініть адресу: openollamagravity.perplexicaUrl у налаштуваннях VSCode.\n` +
+            `Продовжую без web_search — використовую наявні знання.`,
+      };
+    }
+
+    const body = JSON.stringify({
+      query,
+      focusMode,
+      optimizationMode: 'speed',
+    });
+
+    const res = await httpPost(`${baseUrl}/api/search`, body);
+    const data = JSON.parse(res) as {
+      message?: string;
+      sources?: Array<{ metadata?: { title?: string; url?: string }; pageContent?: string }>;
+    };
+
+    // Формуємо стислий вивід: топ-N результатів
+    const sources = (data.sources || []).slice(0, maxResults);
+    const lines: string[] = [];
+
+    if (data.message) {
+      lines.push(`📋 Відповідь Perplexica:\n${data.message}\n`);
+    }
+
+    if (sources.length > 0) {
+      lines.push(`🔗 Джерела (${sources.length}):`);
+      sources.forEach((s, i) => {
+        const title   = s.metadata?.title   || 'Без назви';
+        const url     = s.metadata?.url     || '';
+        const snippet = (s.pageContent || '').slice(0, 300).replace(/\n+/g, ' ');
+        lines.push(`${i + 1}. ${title}\n   ${url}\n   ${snippet}`);
+      });
+    }
+
+    if (lines.length === 0) {
+      return { ok: false, output: `web_search: порожній результат для "${query}".` };
+    }
+
+    const output = lines.join('\n\n');
+    oogLogger.appendLine(`[WebSearch] Отримано ${sources.length} джерел для "${query}"`);
+    return { ok: true, output };
+
+  } catch (e: any) {
+    oogLogger.appendLine(`[WebSearch] Помилка: ${e.message}`);
+    return {
+      ok: false,
+      output: `web_search помилка: ${e.message}. Perplexica запущена? (${baseUrl})`,
+    };
+  }
+}
+
+/** Перевіряє доступність Perplexica за /api/config або / */
+async function checkPerplexica(baseUrl: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const url = new URL('/api/config', baseUrl);
+    const lib = url.protocol === 'https:' ? require('https') : require('http');
+    const req = lib.get(
+        { hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3001), path: url.pathname, timeout: 3000 },
+        (res: any) => { resolve(res.statusCode < 500); }
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+/** HTTP POST helper (http/https) */
+function httpPost(urlStr: string, body: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const lib = url.protocol === 'https:' ? require('https') : require('http');
+    const req = lib.request(
+        {
+          hostname: url.hostname,
+          port:     url.port || (url.protocol === 'https:' ? 443 : 3001),
+          path:     url.pathname + (url.search || ''),
+          method:   'POST',
+          headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+          timeout:  30_000,
+        },
+        (res: any) => {
+          let data = '';
+          res.on('data', (c: Buffer) => { data += c.toString(); });
+          res.on('end', () => resolve(data));
+        }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Perplexica timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
 // ── PATH RESOLVER ─────────────────────────────────────────────────────────────
 
 function resolvePath(p: string): string {

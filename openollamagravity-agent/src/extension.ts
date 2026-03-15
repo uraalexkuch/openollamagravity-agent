@@ -224,8 +224,37 @@ function reg(ctx: vscode.ExtensionContext, id: string, fn: () => unknown) {
 
 async function refreshStatus(ollama: OllamaClient) {
   const up = await ollama.isAvailable();
+
+  // Перевіряємо Perplexica (web_search) без блокування
+  const perplexicaUrl = vscode.workspace
+      .getConfiguration('openollamagravity')
+      .get<string>('perplexicaUrl', 'http://localhost:3001');
+
+  checkPerplexicaAvailable(perplexicaUrl).then(perplexicaUp => {
+    const webIcon = perplexicaUp ? '🌐' : '';
+    statusBar.text = up ? `⚡ ${ollama.model}${webIcon ? ' ' + webIcon : ''}` : `⚡ Ollama offline`;
+    if (statusBar.tooltip && perplexicaUp) {
+      statusBar.tooltip += `\nPerplexica: ${perplexicaUrl}`;
+    }
+  });
+
   statusBar.text = up ? `⚡ ${ollama.model}` : `⚡ Ollama offline`;
   statusBar.show();
+}
+
+function checkPerplexicaAvailable(baseUrl: string): Promise<boolean> {
+  return new Promise(resolve => {
+    try {
+      const url = new URL('/api/config', baseUrl);
+      const lib = url.protocol === 'https:' ? require('https') : require('http');
+      const req = lib.get(
+          { hostname: url.hostname, port: url.port || 3001, path: url.pathname, timeout: 2000 },
+          (res: any) => resolve(res.statusCode < 500)
+      );
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    } catch { resolve(false); }
+  });
 }
 
 export function deactivate() { statusBar?.dispose(); }

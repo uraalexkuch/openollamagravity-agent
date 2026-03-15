@@ -95,6 +95,7 @@ NARRATION RULES:
 - After writing a file → confirm what was created and its purpose
 - Keep it concise — one clear thought per step
 - NEVER output a <tool_call> without at least one narration sentence before it
+- For web_search: explain WHY you are searching and what you expect to find
 
 AVAILABLE TOOLS:
 - name: list_files        args: {"path": "...", "depth": 3}
@@ -104,6 +105,10 @@ AVAILABLE TOOLS:
 - name: create_directory  args: {"path": "..."}
 - name: list_skills       args: {}
 - name: read_skill        args: {"name": "folder-name-of-skill"}
+- name: web_search        args: {"query": "...", "focus": "webSearch", "maxResults": 5}
+  focus options: webSearch | academicSearch | wolframAlphaSearch
+  USE web_search when: task needs current docs, library versions, CVEs, error solutions,
+  recent news, or any information that may not be in your training data.
 
 TECHNICAL RULES:
 1. ONE <tool_call> block per response — at the end, after narration.
@@ -463,13 +468,14 @@ export class AgentLoop {
         // Fallback: агент сам запитує скіл якщо авто-підбір не вистачив
       case 'list_skills':      return Tools.listSkills();
       case 'read_skill':       return Tools.readSkill(args);
+      case 'web_search':       return Tools.webSearch(args);
       default:
         return {
           ok: false,
           output:
               `CRITICAL ERROR: Unknown tool "${name}". ` +
               `Valid tools: read_file, write_file, list_files, run_terminal, ` +
-              `create_directory, list_skills, read_skill. ` +
+              `create_directory, list_skills, read_skill, web_search. ` +
               `Fix your <tool_call> and use an exact tool name from the list.`,
         };
     }
