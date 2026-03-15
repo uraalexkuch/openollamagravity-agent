@@ -282,7 +282,15 @@ export async function webSearch(args: any): Promise<ToolResult> {
     try {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
-      const bodyData = JSON.stringify({ query, focusMode, sources: ['web'] });
+      const currentModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model', 'llama3.1');
+      const bodyData = JSON.stringify({
+        query,
+        focusMode,
+        optimizationMode: 'speed',
+        chatModel:      { provider: 'ollama', model: currentModel },
+        embeddingModel: { provider: 'ollama', model: 'nomic-embed-text' },
+        history: [],
+      });
 
       const req = lib.request(url, {
         method: 'POST',
