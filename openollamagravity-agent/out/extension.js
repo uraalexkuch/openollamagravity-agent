@@ -46,40 +46,70 @@ const client_1 = require("./ollama/client");
 const agentPanel_1 = require("./ui/agentPanel");
 const inlineCompletion_1 = require("./inlineCompletion");
 let statusBar;
-/** Повертає папку Документи незалежно від ОС */
+// ─────────────────────────────────────────────────────────────────────────────
+// SKILLS REPO — sickn33/antigravity-awesome-skills
+// Локальний шлях: %DOCUMENTS%\antigravity-awesome-skills\skills
+//
+// Progressive disclosure (agentskills.io):
+//   list_skills  → повертає лише YAML frontmatter кожного SKILL.md (~30-50 токенів)
+//   read_skill   → завантажує повний текст лише для релевантних скілів
+// ─────────────────────────────────────────────────────────────────────────────
+const SKILLS_REPO_URL = 'https://github.com/sickn33/antigravity-awesome-skills.git';
+const SKILLS_REPO_DIR = 'antigravity-awesome-skills'; // папка в Documents
+const SKILLS_SUBDIR = 'skills'; // підпапка з реальними скілами
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 function getDocumentsPath() {
     return path.join(os.homedir(), 'Documents');
 }
-/** Рекурсивно рахує кількість .md файлів у папці */
+/**
+ * Рекурсивно рахує кількість SKILL.md файлів.
+ * Progressive disclosure: рахуємо саме SKILL.md (не всі .md),
+ * бо кожен скіл — це папка з одним SKILL.md плюс допоміжні файли.
+ * Якщо в репо скіли зберігаються як окремі .md (не SKILL.md),
+ * функція автоматично перемикається на підрахунок усіх .md.
+ */
 function countSkillFiles(dir) {
-    let count = 0;
-    try {
-        for (const entry of fs.readdirSync(dir)) {
-            if (entry.startsWith('.')) {
+    let skillMdCount = 0;
+    let anyMdCount = 0;
+    function walk(d) {
+        let entries;
+        try {
+            entries = fs.readdirSync(d);
+        }
+        catch {
+            return;
+        }
+        for (const e of entries) {
+            if (e.startsWith('.'))
                 continue;
+            const full = path.join(d, e);
+            try {
+                if (fs.statSync(full).isDirectory()) {
+                    walk(full);
+                }
+                else if (e === 'SKILL.md') {
+                    skillMdCount++;
+                    anyMdCount++;
+                }
+                else if (e.toLowerCase().endsWith('.md')) {
+                    anyMdCount++;
+                }
             }
-            const full = path.join(dir, entry);
-            if (fs.statSync(full).isDirectory()) {
-                count += countSkillFiles(full);
-            }
-            else if (entry.toLowerCase().endsWith('.md')) {
-                count++;
-            }
+            catch { }
         }
     }
-    catch { /* ignore permission errors */ }
-    return count;
+    walk(dir);
+    // Якщо є SKILL.md — репо відповідає agentskills.io структурі
+    return skillMdCount > 0 ? skillMdCount : anyMdCount;
 }
-/** Українське закінчення для слова "скіл" */
 function pluralUk(n) {
-    if (n % 10 === 1 && n % 100 !== 11) {
+    if (n % 10 === 1 && n % 100 !== 11)
         return '';
-    }
-    if (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14)) {
+    if (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14))
         return 'и';
-    }
     return 'ів';
 }
+// ── SKILLS SYNC ───────────────────────────────────────────────────────────────
 async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
     return new Promise((resolve) => {
         cp.exec('git --version', (gitCheckErr) => {
@@ -93,7 +123,7 @@ async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
             const title = needsClone ? 'OOG: Завантаження скілів...' : 'OOG: Оновлення скілів...';
             vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title }, () => new Promise((done) => {
                 const cmd = needsClone
-                    ? `git clone https://github.com/sickn33/antigravity-awesome-skills.git "${repoPath}"`
+                    ? `git clone ${SKILLS_REPO_URL} "${repoPath}"`
                     : `git -C "${repoPath}" pull`;
                 cp.exec(cmd, { env }, (err, stdout) => {
                     if (err) {
@@ -104,7 +134,6 @@ async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
                         return;
                     }
                     context.globalState.update('oog.skills_initialized', true);
-                    // Рахуємо скіли з підпапки /skills
                     const count = fs.existsSync(skillsPath) ? countSkillFiles(skillsPath) : 0;
                     const shortPath = skillsPath.replace(os.homedir(), '~');
                     const alreadyUpToDate = !needsClone &&
@@ -120,7 +149,10 @@ async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
                         });
                     }
                     if (statusBar) {
-                        statusBar.tooltip = `Skills: ${count} файлів\n📁 ${shortPath}`;
+                        statusBar.tooltip =
+                            `Skills: ${count} файлів\n` +
+                                `Progressive disclosure: list_skills → read_skill\n` +
+                                `📁 ${shortPath}`;
                     }
                     done();
                     resolve();
@@ -129,16 +161,18 @@ async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
         });
     });
 }
+// ── ACTIVATE ──────────────────────────────────────────────────────────────────
 async function activate(context) {
     const documentsPath = getDocumentsPath();
-    // Репозиторій цілком
-    const repoPath = path.join(documentsPath, 'antigravity-awesome-skills');
-    // Підпапка з реальними скілами
-    const skillsPath = path.join(repoPath, 'skills');
+    // C:\Users\kucherenko.yurii\Documents\antigravity-awesome-skills
+    const repoPath = path.join(documentsPath, SKILLS_REPO_DIR);
+    // C:\Users\kucherenko.yurii\Documents\antigravity-awesome-skills\skills
+    const skillsPath = path.join(repoPath, SKILLS_SUBDIR);
     if (!fs.existsSync(documentsPath)) {
         fs.mkdirSync(documentsPath, { recursive: true });
     }
-    // Зберігаємо шлях до підпапки /skills — саме його використовують list_skills / read_skill
+    // skillsPath зберігається в налаштуваннях — tools.ts читає його
+    // для побудови індексу frontmatter (Phase 1) і повного тексту (Phase 2)
     await vscode.workspace
         .getConfiguration('openollamagravity')
         .update('skillsPath', skillsPath, vscode.ConfigurationTarget.Global);
@@ -147,11 +181,13 @@ async function activate(context) {
     const ollama = new client_1.OllamaClient();
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBar.command = 'openollamagravity.selectModel';
-    // Одразу показуємо тултіп якщо скіли вже є
     if (fs.existsSync(skillsPath)) {
         const count = countSkillFiles(skillsPath);
         const shortPath = skillsPath.replace(os.homedir(), '~');
-        statusBar.tooltip = `Skills: ${count} файлів\n📁 ${shortPath}`;
+        statusBar.tooltip =
+            `Skills: ${count} файлів\n` +
+                `Progressive disclosure: list_skills → read_skill\n` +
+                `📁 ${shortPath}`;
     }
     context.subscriptions.push(statusBar);
     refreshStatus(ollama).catch(console.error);
@@ -159,11 +195,15 @@ async function activate(context) {
     reg(context, 'openollamagravity.openAgent', () => agentPanel_1.AgentPanel.show(context.extensionUri, ollama));
     reg(context, 'openollamagravity.newTask', () => agentPanel_1.AgentPanel.show(context.extensionUri, ollama, true));
     reg(context, 'openollamagravity.stopAgent', () => [...agentPanel_1.AgentPanel.panels].forEach(p => p.dispose()));
+    // Ручне оновлення скілів через Command Palette
+    reg(context, 'openollamagravity.syncSkills', async () => {
+        await syncSkills(repoPath, skillsPath, false, context);
+    });
     reg(context, 'openollamagravity.selectModel', async () => {
         let models = [];
         try {
             const list = await ollama.listModels();
-            models = list.map(m => m.name);
+            models = list.map((m) => m.name);
         }
         catch {
             return;
