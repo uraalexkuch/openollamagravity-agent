@@ -1023,23 +1023,34 @@ export async function getFileOutline(args: any): Promise<ToolResult> {
   } catch (e: any) { return { ok: false, output: e.message }; }
 }
 
-export async function getWorkspaceInfo(): Promise<ToolResult> {
+export async function getWorkspaceInfo(args?: { path?: string }): Promise<ToolResult> {
   try {
-    // Re-use context.ts logic or a lightweight version
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) return { ok: false, output: 'No active workspace.' };
+    const root = args?.path 
+      ? path.resolve(args.path) 
+      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (!root) return { ok: false, output: 'No path specified and no active workspace.' };
+    
     const pkgPath = path.join(root, 'package.json');
-    let out = `Workspace root: ${root}\n`;
+    let out = `Resolved path: ${root}\n`;
+    
     if (fs.existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
         out += `Project: ${pkg.name || 'Unknown'}\n`;
         out += `Scripts: ${Object.keys(pkg.scripts || {}).join(', ')}\n`;
-        out += `Deps: ${Object.keys(pkg.dependencies || {}).join(', ')}\n`;
-        out += `DevDeps: ${Object.keys(pkg.devDependencies || {}).join(', ')}\n`;
-      } catch {}
+        const deps = Object.keys(pkg.dependencies || {});
+        const devDeps = Object.keys(pkg.devDependencies || {});
+        out += `Deps: ${deps.slice(0, 15).join(', ')}${deps.length > 15 ? '...' : ''}\n`;
+        out += `DevDeps: ${devDeps.slice(0, 15).join(', ')}${devDeps.length > 15 ? '...' : ''}\n`;
+      } catch (e: any) {
+        out += `[Warning] Found package.json but failed to parse: ${e.message}\n`;
+      }
+    } else {
+      out += `[Warning] No package.json found at this path.\n`;
     }
-    out += `\nTo list initial files, use list_files.`;
+    
+    out += `\nTo see directory structure, use list_files.`;
     return { ok: true, output: out };
   } catch (e: any) { return { ok: false, output: e.message }; }
 }

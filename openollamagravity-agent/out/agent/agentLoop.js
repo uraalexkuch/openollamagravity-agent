@@ -73,8 +73,8 @@ function buildSystemPrompt(language, skills, workspaceContext, workspacePath, wo
     // Агент ЗОБОВ'ЯЗАНИЙ використовувати цей шлях і не вигадувати свій
     const rootBlock = (workspaceRoot || workspacePath)
         ? `\n\nWORKSPACE ROOT: ${workspaceRoot || workspacePath}\n`
-            + `MANDATORY: use this EXACT path for ALL file operations.\n`
-            + `NEVER invent or guess paths. Start with list_files on this root.`
+            + `When working within the project, use this path as your base.\n`
+            + `CROSS-PROJECT ACCESS: You can access, read, and edit files in ANY project on the user's computer by using absolute paths in tool arguments.`
         : '';
     return `You are an advanced autonomous coding and cybersecurity agent.
 You always explain what you are doing so the user understands your progress.
@@ -160,9 +160,11 @@ TECHNICAL RULES:
 2. WINDOWS PATHS — always double backslash in JSON args:
    CORRECT:   {"path": "D:\\\\web_project\\\\src\\\\main.ts"}
    INCORRECT: {"path": "D:\\web_project\\src\\main.ts"}
-   ALWAYS use ACTIVE WORKSPACE PATH (shown below) as base — do NOT invent paths.
+   You can use absolute paths to access files ANYWHERE on the disk.
 3. Use ONLY exact tool names listed above.
 4. If task needs a skill not loaded below → list_skills then read_skill.
+5. Prefer small targeted edits (edit_file) over full rewrites (write_file) when possible.
+6. SELF-TESTING: You MUST verify your changes! Use "run_terminal" to run builds (e.g. "npm run start:dev", "npm run build", "tsc") or tests in the target project's directory (using the 'cwd' argument) to ensure everything compiles and works without errors.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 // ── TOOL CALL PARSER ─────────────────────────────────────────────────────────
