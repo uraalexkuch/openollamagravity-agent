@@ -623,7 +623,7 @@ async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNe
 function getPerplexicaUrl() {
     return vscode.workspace
         .getConfiguration('openollamagravity')
-        .get('perplexicaUrl', 'http://localhost:3001');
+        .get('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 /**
  * Виконує пошук через Perplexica API.
@@ -659,31 +659,28 @@ async function webSearch(args) {
         const body = JSON.stringify({
             query,
             focusMode,
-            optimizationMode: 'speed',
         });
         const res = await httpPost(`${baseUrl}/api/search`, body);
         const data = JSON.parse(res);
-        // Формуємо стислий вивід: топ-N результатів
-        const sources = (data.sources || []).slice(0, maxResults);
-        const lines = [];
-        if (data.message) {
-            lines.push(`📋 Відповідь Perplexica:\n${data.message}\n`);
+        if (!data.message && (!data.sources || data.sources.length === 0)) {
+            return { ok: true, output: "No results found." };
         }
-        if (sources.length > 0) {
-            lines.push(`🔗 Джерела (${sources.length}):`);
+        let output = `Search Results for "${query}":\n\n`;
+        if (data.message) {
+            output += `Summary: ${data.message}\n\n`;
+        }
+        if (data.sources && data.sources.length > 0) {
+            output += "Sources:\n";
+            const sources = data.sources.slice(0, maxResults);
             sources.forEach((s, i) => {
-                const title = s.metadata?.title || 'Без назви';
-                const url = s.metadata?.url || '';
-                const snippet = (s.pageContent || '').slice(0, 300).replace(/\n+/g, ' ');
-                lines.push(`${i + 1}. ${title}\n   ${url}\n   ${snippet}`);
+                const title = s.metadata?.title || s.title || 'Без назви';
+                const url = s.metadata?.url || s.url || '';
+                const snippet = (s.pageContent || s.snippet || '').slice(0, 300).replace(/\n+/g, ' ');
+                output += `[${i + 1}] ${title}\nURL: ${url}\n${snippet}\n\n`;
             });
         }
-        if (lines.length === 0) {
-            return { ok: false, output: `web_search: порожній результат для "${query}".` };
-        }
-        const output = lines.join('\n\n');
-        client_1.oogLogger.appendLine(`[WebSearch] Отримано ${sources.length} джерел для "${query}"`);
-        return { ok: true, output };
+        client_1.oogLogger.appendLine(`[WebSearch] Отримано ${data.sources?.length || 0} джерел для "${query}"`);
+        return { ok: true, output: output.trim() };
     }
     catch (e) {
         client_1.oogLogger.appendLine(`[WebSearch] Помилка: ${e.message}`);
@@ -698,7 +695,7 @@ async function checkPerplexica(baseUrl) {
     return new Promise(resolve => {
         const url = new URL('/api/config', baseUrl);
         const lib = url.protocol === 'https:' ? https : http;
-        const req = lib.get({ hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3001), path: url.pathname, timeout: 3000 }, (res) => { resolve(res.statusCode < 500); });
+        const req = lib.get({ hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 3030), path: url.pathname, timeout: 3000 }, (res) => { resolve(res.statusCode < 500); });
         req.on('error', () => resolve(false));
         req.on('timeout', () => { req.destroy(); resolve(false); });
     });
@@ -710,7 +707,7 @@ function httpPost(urlStr, body) {
         const lib = url.protocol === 'https:' ? https : http;
         const req = lib.request({
             hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 3001),
+            port: url.port || (url.protocol === 'https:' ? 443 : 3030),
             path: url.pathname + (url.search || ''),
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
