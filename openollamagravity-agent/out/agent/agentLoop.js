@@ -399,11 +399,10 @@ class AgentLoop {
                     `3. Do NOT use single backslash \\ inside JSON strings\n` +
                     `Retry your tool call with correct JSON.`;
                 this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
-                this._history.push({ role: 'assistant', content: output });
                 this._history.push({
                     role: 'user',
-                    content: `<tool_result>\n<n>${tool.name}</n>\n<ok>false</ok>\n` +
-                        `<o>${errMsg}</o>\n</tool_result>`,
+                    content: `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
+                        `<output>${errMsg}</output>\n</tool_result>`,
                 });
                 continue; // даємо агенту шанс виправитись
             }
@@ -427,13 +426,13 @@ class AgentLoop {
                     `<output>${res.output}</output>\n` +
                     `</tool_result>`,
             });
-            // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ ─────────────────────────────────────────────
+            // ── ДИНАМІЧНИЙ ПОШУК СКІЛІВ (ВИМКНЕНО ДЛЯ ПРИСКОРЕННЯ) ──────────────────
             // Аналізуємо вміст tool_result на сигнали: мова, фреймворк, технологія.
-            // Нові знайдені скіли одразу вставляються в history — LLM використовує
-            // їх вже на наступному кроці, без зайвих list_skills / read_skill запитів.
+            /*
             if (res.ok) {
-                await this._discoverSkillsFromResult(tool.name, res.output);
+              await this._discoverSkillsFromResult(tool.name, res.output);
             }
+            */
         }
         this.running = false;
         this.emit({ type: 'done', content: '' });
