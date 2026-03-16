@@ -551,6 +551,7 @@ function getPerplexicaUrl() {
 /** 🌐 WEB SEARCH через Perplexica */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
+    // Очищення запиту від спецсимволів
     query = query.replace(/[@#$]/g, ' ');
     let website = args?.website || args?.domain;
     if (website) {
@@ -561,25 +562,14 @@ async function webSearch(args) {
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
     client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
-    const activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
     return new Promise((promiseResolve) => {
         try {
             const url = new URL('/api/search', perplexicaUrl);
             const lib = url.protocol === 'https:' ? https : http;
+            // ВИКОРИСТОВУЄМО МІНІМАЛЬНИЙ ПЕЙЛОАД
             const bodyData = JSON.stringify({
-                query,
-                focusMode: args.focusMode || 'webSearch',
-                sources: ['web'],
-                optimizationMode: 'speed',
-                history: [],
-                chatModel: {
-                    provider: 'ollama',
-                    model: activeModel
-                },
-                embeddingModel: {
-                    provider: 'ollama',
-                    model: 'nomic-embed-text-v2-moe:latest' // <--- ЗМІНЕНО НА ВАШУ МОДЕЛЬ
-                }
+                query: query,
+                focusMode: args.focusMode || 'webSearch'
             });
             const req = lib.request(url, {
                 method: 'POST',
@@ -595,7 +585,7 @@ async function webSearch(args) {
                         client_1.oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
                         promiseResolve({
                             ok: false,
-                            output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'nomic-embed-text-v2-moe:latest' is pulled and SearxNG is running.`
+                            output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}`
                         });
                         return;
                     }

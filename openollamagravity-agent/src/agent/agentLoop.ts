@@ -99,7 +99,6 @@ function repairJson(raw: string): string {
       continue;
     }
 
-    // МАГІЯ ДЛЯ МУЛЬТИРАЙНОВОГО ТЕКСТУ
     if (ch === '\n') {
       finalResult += '\\n';
       i++;
@@ -441,36 +440,15 @@ export class AgentLoop {
       case 'delegate_to_expert':
         if (!args.role || !args.question) return { ok: false, output: 'Missing role or question' };
 
-        this.emit({ type: 'narration', content: `👥 Swarm: Підготовка субагента [${args.role}] та завантаження експертних скілів...` });
+        this.emit({ type: 'narration', content: `👥 Swarm: Звертаюсь до субагента [${args.role}]...` });
 
-        // 1. Автоматично підбираємо найкращі скіли для цього субагента
-        const expertTask = `${args.role} ${args.question}`;
-        const expertSkills = await Tools.autoLoadSkillsForTask(expertTask, args.context || '', 3);
-
-        let expertSkillsBlock = '';
-        if (expertSkills.length > 0) {
-          expertSkillsBlock = `\n\n### YOUR EXPERT SKILLS & KNOWLEDGE BASE:\n` +
-              expertSkills.map(s => `#### ${s.name}\n${s.content}`).join('\n\n');
-
-          this.emit({
-            type: 'narration',
-            content: `👥 Swarm: Експерт [${args.role}] озброєний ${expertSkills.length} скілами: ${expertSkills.map(s => s.name).join(', ')}`
-          });
-        } else {
-          this.emit({ type: 'narration', content: `👥 Swarm: Субагент [${args.role}] працює на базових знаннях моделі.` });
-        }
-
-        // 2. Формуємо промпт для субагента із вбудованими скілами
         const subPrompt = `You are an expert AI sub-agent with the role: ${args.role}. 
-Your goal is to answer the following request from the Main Agent accurately, directly, and professionally.
-${expertSkillsBlock}
-
-### TASK FROM MAIN AGENT:
+Your goal is to answer the following request from the Main Agent.
 CONTEXT: ${args.context || 'None provided'}
 QUESTION: ${args.question}`;
 
         try {
-          const answer = await this._ollama.generate(subPrompt, 8192, undefined);
+          const answer = await this._ollama.generate(subPrompt, 4096, undefined);
           return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
         } catch (e: any) {
           return { ok: false, output: `Expert failed: ${e.message}` };
