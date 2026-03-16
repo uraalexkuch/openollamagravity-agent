@@ -1,7 +1,7 @@
 const http = require('http');
 
 const perplexicaConfig = {
-  hostname: 'localhost',
+  hostname: '10.1.0.138',
   port: 3030,
   path: '/api/search'
 };
