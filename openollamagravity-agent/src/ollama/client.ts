@@ -17,9 +17,12 @@ export class OllamaClient {
     return vscode.workspace.getConfiguration('openollamagravity').get(key, def);
   }
 
+  private _dynamicContextCache = new Map<string, number>();
+
   /** Оптимізує вікно контексту під конкретну модель на основі її максимальних можливостей */
   private getDynamicContext(model: string): number {
     const m = model.toLowerCase();
+    if (this._dynamicContextCache.has(m)) return this._dynamicContextCache.get(m)!;
 
     const limit = this.cfg<number>('maxDynamicContext', 262144);
 
@@ -65,7 +68,9 @@ export class OllamaClient {
 
     if (m.includes('mxbai')) return Math.min(512, limit);
 
-    return Math.min(4096, limit);
+    const res = Math.min(4096, limit);
+    this._dynamicContextCache.set(m, res);
+    return res;
   }
 
   async listModels(): Promise<any[]> {
@@ -76,7 +81,8 @@ export class OllamaClient {
   }
 
   async isAvailable(): Promise<boolean> {
-    try { await this.get('/api/tags'); return true; } catch { return false; }
+    const models = await this.listModels();
+    return models.length > 0;
   }
 
   async chatStream(messages: OllamaMessage[], onChunk: (t: string) => void, signal?: AbortSignal, modelOverride?: string): Promise<string> {
@@ -141,7 +147,10 @@ export class OllamaClient {
         res.on('end', () => resolve(full));
       });
       req.on('error', reject);
-      signal?.addEventListener('abort', () => { req.destroy(); resolve(full); });
+      signal?.addEventListener('abort', () => { 
+        req.destroy(); 
+        reject(new Error('Aborted')); 
+      });
       req.write(body); req.end();
     });
   }
@@ -158,7 +167,12 @@ export class OllamaClient {
     try {
       const res = await this.post('/api/generate', body, signal);
       return JSON.parse(res).response || '';
-    } catch { return ''; }
+    } catch (e: any) { 
+      if (e.message !== 'Aborted') {
+        oogLogger.appendLine(`[Ollama] generate() error: ${e.message}`);
+      }
+      return ''; 
+    }
   }
 
   private async get(p: string): Promise<string> {

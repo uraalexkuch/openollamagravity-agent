@@ -64,14 +64,17 @@ const client_1 = require("../ollama/client");
 const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 let currentPlan = [];
+let _planIdCounter = 0;
 async function managePlan(args) {
     const { action, task, id } = args;
     if (action === 'clear') {
         currentPlan = [];
+        _planIdCounter = 0;
         return { ok: true, output: 'Plan cleared.' };
     }
     if (action === 'create' && task) {
-        currentPlan.push({ id: currentPlan.length + 1, task, status: 'open' });
+        _planIdCounter++;
+        currentPlan.push({ id: _planIdCounter, task, status: 'open' });
         return { ok: true, output: `Task added.\n${formatPlan()}` };
     }
     if (action === 'complete' && id !== undefined) {
@@ -127,7 +130,13 @@ async function getAllSkills() {
 function getSkillsPath() {
     return vscode.workspace.getConfiguration('openollamagravity').get('skillsPath', '');
 }
+const _skillsCache = new Map();
+const SKILLS_CACHE_TTL = 30000;
 function scanSkillFolders(skillsPath) {
+    const cached = _skillsCache.get(skillsPath);
+    if (cached && (Date.now() - cached.ts) < SKILLS_CACHE_TTL) {
+        return cached.files;
+    }
     const skillMd = [];
     const legacyMd = [];
     function walk(dir) {
@@ -158,7 +167,9 @@ function scanSkillFolders(skillsPath) {
         }
     }
     walk(skillsPath);
-    return skillMd.length > 0 ? skillMd : legacyMd;
+    const files = skillMd.length > 0 ? skillMd : legacyMd;
+    _skillsCache.set(skillsPath, { files, ts: Date.now() });
+    return files;
 }
 function readFrontmatter(filePath) {
     try {
@@ -546,7 +557,7 @@ async function saveSkill(args, onConfirm) {
 function getPerplexicaUrl() {
     return vscode.workspace
         .getConfiguration('openollamagravity')
-        .get('perplexicaUrl', 'http://10.1.0.138:3030');
+        .get('perplexicaUrl', 'http://localhost:3030');
 }
 let _providersCache = null;
 let _providersCacheTs = 0;
@@ -726,21 +737,29 @@ const READ_FILE_MAX_BYTES = 100 * 1024;
 async function readFile(args) {
     try {
         const abs = resolvePath(args.path);
+        if (!fs.existsSync(abs))
+            return { ok: false, output: `File not found: ${args.path}` };
         const stat = fs.statSync(abs);
-        if (stat.size > READ_FILE_MAX_BYTES) {
-            const fd = fs.openSync(abs, 'r');
-            const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
-            const n = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
-            fs.closeSync(fd);
-            const preview = buf.subarray(0, n).toString('utf8');
+        const content = fs.readFileSync(abs, 'utf8');
+        if (args.start_line !== undefined || args.end_line !== undefined) {
+            const lines = content.split('\n');
+            const start = Math.max(0, (args.start_line || 1) - 1);
+            const end = Math.min(lines.length, args.end_line || lines.length);
+            const slice = lines.slice(start, end);
             return {
                 ok: true,
-                output: preview +
+                output: slice.join('\n') || '[Nothing in this line range]'
+            };
+        }
+        if (stat.size > READ_FILE_MAX_BYTES) {
+            return {
+                ok: true,
+                output: content.slice(0, READ_FILE_MAX_BYTES) +
                     `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
                     ` Use specific line ranges if you need more.]`,
             };
         }
-        return { ok: true, output: fs.readFileSync(abs, 'utf8') };
+        return { ok: true, output: content };
     }
     catch (e) {
         return { ok: false, output: e.message };
@@ -936,7 +955,7 @@ async function getDiagnostics(args) {
             for (const d of fileDiags) {
                 const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' :
                     d.severity === vscode.DiagnosticSeverity.Warning ? 'WARN' : 'INFO';
-                result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'uknown'})`);
+                result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'unknown'})`);
             }
         }
         return { ok: true, output: result.length > 0 ? result.join('\n') : 'No diagnostics found. Everything looks clean!' };

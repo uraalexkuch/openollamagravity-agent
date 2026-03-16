@@ -42,6 +42,8 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const cp = __importStar(require("child_process"));
 const os = __importStar(require("os"));
+const http = __importStar(require("http"));
+const https = __importStar(require("https"));
 const client_1 = require("./ollama/client");
 const agentPanel_1 = require("./ui/agentPanel");
 const inlineCompletion_1 = require("./inlineCompletion");
@@ -229,7 +231,7 @@ async function refreshStatus(ollama) {
     // Перевіряємо Perplexica (web_search) без блокування
     const perplexicaUrl = vscode.workspace
         .getConfiguration('openollamagravity')
-        .get('perplexicaUrl', 'http://localhost:3001');
+        .get('perplexicaUrl', 'http://localhost:3030');
     // Спочатку показуємо базовий статус (до відповіді Perplexica)
     statusBar.text = up ? `⚡ ${ollama.model}` : `⚡ Ollama offline`;
     statusBar.show();
@@ -246,8 +248,8 @@ function checkPerplexicaAvailable(baseUrl) {
     return new Promise(resolve => {
         try {
             const url = new URL('/api/config', baseUrl);
-            const lib = url.protocol === 'https:' ? require('https') : require('http');
-            const req = lib.get({ hostname: url.hostname, port: url.port || 3001, path: url.pathname, timeout: 2000 }, (res) => resolve(res.statusCode < 500));
+            const lib = url.protocol === 'https:' ? https : http;
+            const req = lib.get({ hostname: url.hostname, port: url.port || 3030, path: url.pathname, timeout: 2000 }, (res) => resolve(res.statusCode < 500));
             req.on('error', () => resolve(false));
             req.on('timeout', () => { req.destroy(); resolve(false); });
         }

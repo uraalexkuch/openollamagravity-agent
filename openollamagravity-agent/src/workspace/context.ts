@@ -54,10 +54,11 @@ export function getActiveFileContent(): string {
   const content = doc.getText();
 
   // Byte cap — захист від мініфікованих файлів
-  if (Buffer.byteLength(content, 'utf8') > MAX_CONTEXT_BYTES) {
+  const bytes = Buffer.byteLength(content, 'utf8');
+  if (bytes > MAX_CONTEXT_BYTES) {
     const truncated = content.slice(0, MAX_CONTEXT_BYTES);
     const lineCount = content.split('\n').length;
-    return `\`\`\`${doc.languageId}\n${truncated}\n…[truncated — file is ${lineCount} lines / ${Math.round(Buffer.byteLength(content, 'utf8') / 1024)}KB, showing first 20KB]\n\`\`\``;
+    return `\`\`\`${doc.languageId}\n${truncated}\n…[truncated — file is ${lineCount} lines / ${Math.round(bytes / 1024)}KB, showing first 20KB]\n\`\`\``;
   }
 
   const lines = content.split('\n');

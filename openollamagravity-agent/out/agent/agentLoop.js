@@ -198,144 +198,145 @@ class AgentLoop {
     }
     async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '', selectedSkillFolders = []) {
         this.running = true;
-        this._abortCtrl = new AbortController();
-        const signal = this._abortCtrl.signal;
-        const maxSteps = vscode.workspace
-            .getConfiguration('openollamagravity')
-            .get('maxAgentSteps', 25);
-        const resolvedRoot = workspaceRoot
-            || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            || '';
-        let loadedSkills = [];
-        if (this._history.length === 0) {
-            const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
-            if (selectedSkillFolders.length > 0) {
+        try {
+            this._abortCtrl = new AbortController();
+            const signal = this._abortCtrl.signal;
+            const config = vscode.workspace.getConfiguration('openollamagravity');
+            const maxSteps = config.get('maxAgentSteps', 25);
+            const timeoutMs = config.get('firstTokenTimeoutSec', 180) * 1000;
+            const resolvedRoot = workspaceRoot
+                || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+                || '';
+            let loadedSkills = [];
+            if (this._history.length === 0) {
+                const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
+                if (selectedSkillFolders.length > 0) {
+                    try {
+                        const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
+                        const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
+                        loadedSkills = Tools.loadTopSkills(toLoad, 10);
+                    }
+                    catch (e) {
+                        client_1.oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
+                    }
+                }
+                if (loadedSkills.length > 0) {
+                    this.emit({
+                        type: 'skills_loaded',
+                        content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
+                        skills: loadedSkills.map(s => ({
+                            name: s.name,
+                            folderName: s.folderName,
+                            description: s.description,
+                            score: s.score,
+                        })),
+                    });
+                }
+                const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+                const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
+                loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
+                this._history.push({ role: 'system', content: sysPrompt });
+                if (contextMessages.length > 0)
+                    this._history.push(...contextMessages);
+            }
+            this._history.push({ role: 'user', content: task });
+            for (let step = 1; step <= maxSteps; step++) {
+                if (signal.aborted)
+                    break;
+                this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
+                let output = '';
                 try {
-                    const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
-                    const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
-                    loadedSkills = Tools.loadTopSkills(toLoad, 10);
+                    output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
                 }
-                catch (e) {
-                    client_1.oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
+                catch (err) {
+                    this.emit({ type: 'error', content: err.message });
+                    break;
                 }
-            }
-            if (loadedSkills.length > 0) {
-                this.emit({
-                    type: 'skills_loaded',
-                    content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-                    skills: loadedSkills.map(s => ({
-                        name: s.name,
-                        folderName: s.folderName,
-                        description: s.description,
-                        score: s.score,
-                    })),
-                });
-            }
-            const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-            const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
-            loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
-            this._history.push({ role: 'system', content: sysPrompt });
-            if (contextMessages.length > 0)
-                this._history.push(...contextMessages);
-        }
-        this._history.push({ role: 'user', content: task });
-        for (let step = 1; step <= maxSteps; step++) {
-            if (signal.aborted)
-                break;
-            this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
-            let output = '';
-            try {
-                output = await this._streamWithTimeout(step, maxSteps, signal);
-            }
-            catch (err) {
-                this.emit({ type: 'error', content: err.message });
-                break;
-            }
-            const tool = parseToolCall(output);
-            if (!tool) {
-                const isBrokenTags = output.includes('<tool_call>');
-                const toolNames = [
-                    'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
-                    'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
-                    'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
-                    'manage_plan', 'delegate_to_expert', 'save_skill'
-                ];
-                const forgottenTool = toolNames.find(tn => output.includes(tn));
-                if (isBrokenTags || (forgottenTool && output.length < 500)) {
-                    const reason = isBrokenTags
-                        ? `malformed <tool_call> structure`
-                        : `missing <tool_call> tags for ${forgottenTool}`;
-                    this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
-                    this._history.push({ role: 'assistant', content: output });
-                    const actualTool = forgottenTool || 'list_files';
+                const tool = parseToolCall(output);
+                if (!tool) {
+                    const isBrokenTags = output.includes('<tool_call>');
+                    const toolNames = [
+                        'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
+                        'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
+                        'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
+                        'manage_plan', 'delegate_to_expert', 'save_skill'
+                    ];
+                    const forgottenTool = toolNames.find(tn => output.includes(tn));
+                    if (isBrokenTags || (forgottenTool && output.length < 500)) {
+                        const reason = isBrokenTags
+                            ? `malformed <tool_call> structure`
+                            : `missing <tool_call> tags for ${forgottenTool}`;
+                        this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
+                        this._history.push({ role: 'assistant', content: output });
+                        const actualTool = forgottenTool || 'list_files';
+                        this._history.push({
+                            role: 'user',
+                            content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
+                                `You tried to use a tool but didn't wrap it correctly.\n` +
+                                `FIX: You MUST use this exact XML format:\n` +
+                                `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
+                                `Please retry.`
+                        });
+                        continue;
+                    }
+                    this.emit({ type: 'answer', content: output });
+                    break;
+                }
+                if (tool.narration) {
+                    this.emit({ type: 'narration', content: tool.narration });
+                }
+                if (tool.parseError) {
+                    this.emit({
+                        type: 'tool_call', content: `Parse error: ${tool.name}`,
+                        toolName: tool.name, toolArgs: {},
+                    });
+                    const errMsg = `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
+                        `Error: ${tool.parseError}\n\n` +
+                        `REQUIRED FIX:\n` +
+                        `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
+                        `2. Escape all special chars in JSON strings\n` +
+                        `3. Do NOT use single backslash \\ inside JSON strings\n` +
+                        `Retry your tool call with correct JSON.`;
+                    this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
                     this._history.push({
                         role: 'user',
-                        content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
-                            `You tried to use a tool but didn't wrap it correctly.\n` +
-                            `FIX: You MUST use this exact XML format:\n` +
-                            `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
-                            `Please retry.`
+                        content: `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
+                            `<output>${errMsg}</output>\n</tool_result>`,
                     });
                     continue;
                 }
-                this.emit({ type: 'answer', content: output });
-                break;
-            }
-            if (tool.narration) {
-                this.emit({ type: 'narration', content: tool.narration });
-            }
-            if (tool.parseError) {
                 this.emit({
-                    type: 'tool_call', content: `Parse error: ${tool.name}`,
-                    toolName: tool.name, toolArgs: {},
+                    type: 'tool_call', content: `Calling: ${tool.name}`,
+                    toolName: tool.name, toolArgs: tool.args,
                 });
-                const errMsg = `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
-                    `Error: ${tool.parseError}\n\n` +
-                    `REQUIRED FIX:\n` +
-                    `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
-                    `2. Escape all special chars in JSON strings\n` +
-                    `3. Do NOT use single backslash \\ inside JSON strings\n` +
-                    `Retry your tool call with correct JSON.`;
-                this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
+                const res = await this._executeTool(tool.name, tool.args);
+                this.emit({
+                    type: 'tool_result', content: res.output,
+                    toolName: tool.name, ok: res.ok,
+                });
+                let historyOutput = res.output;
+                if (historyOutput.length > 8000) {
+                    historyOutput = historyOutput.slice(0, 4000) +
+                        `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
+                        historyOutput.slice(-4000);
+                }
+                this._history.push({ role: 'assistant', content: output });
                 this._history.push({
                     role: 'user',
-                    content: `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
-                        `<output>${errMsg}</output>\n</tool_result>`,
+                    content: `<tool_result>\n` +
+                        `<name>${tool.name}</name>\n` +
+                        `<ok>${res.ok}</ok>\n` +
+                        `<output>${historyOutput}</output>\n` +
+                        `</tool_result>`,
                 });
-                continue;
             }
-            this.emit({
-                type: 'tool_call', content: `Calling: ${tool.name}`,
-                toolName: tool.name, toolArgs: tool.args,
-            });
-            const res = await this._executeTool(tool.name, tool.args);
-            this.emit({
-                type: 'tool_result', content: res.output,
-                toolName: tool.name, ok: res.ok,
-            });
-            let historyOutput = res.output;
-            if (historyOutput.length > 8000) {
-                historyOutput = historyOutput.slice(0, 4000) +
-                    `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
-                    historyOutput.slice(-4000);
-            }
-            this._history.push({ role: 'assistant', content: output });
-            this._history.push({
-                role: 'user',
-                content: `<tool_result>\n` +
-                    `<name>${tool.name}</name>\n` +
-                    `<ok>${res.ok}</ok>\n` +
-                    `<output>${historyOutput}</output>\n` +
-                    `</tool_result>`,
-            });
         }
-        this.running = false;
-        this.emit({ type: 'done', content: '' });
+        finally {
+            this.running = false;
+            this.emit({ type: 'done', content: '' });
+        }
     }
-    async _streamWithTimeout(step, total, signal) {
-        const ms = vscode.workspace
-            .getConfiguration('openollamagravity')
-            .get('firstTokenTimeoutSec', 180) * 1000;
+    async _streamWithTimeout(step, total, ms, signal) {
         return new Promise((resolve, reject) => {
             let started = false;
             const timer = setTimeout(() => {
@@ -370,11 +371,13 @@ class AgentLoop {
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
             case 'web_search': return Tools.webSearch(args);
-            case 'manage_plan':
+            case 'manage_plan': {
                 return Tools.managePlan(args);
-            case 'save_skill':
+            }
+            case 'save_skill': {
                 return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
-            case 'delegate_to_expert':
+            }
+            case 'delegate_to_expert': {
                 if (!args.role || !args.question)
                     return { ok: false, output: 'Missing role or question' };
                 this.emit({ type: 'narration', content: `👥 Swarm: Звертаюсь до субагента [${args.role}]...` });
@@ -383,13 +386,14 @@ Your goal is to answer the following request from the Main Agent.
 CONTEXT: ${args.context || 'None provided'}
 QUESTION: ${args.question}`;
                 try {
-                    const answer = await this._ollama.generate(subPrompt, 4096, undefined);
+                    const answer = await this._ollama.generate(subPrompt, 4096);
                     return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
                 }
                 catch (e) {
                     return { ok: false, output: `Expert failed: ${e.message}` };
                 }
-            default:
+            }
+            default: {
                 return {
                     ok: false,
                     output: `CRITICAL ERROR: Unknown tool "${name}". ` +
@@ -397,6 +401,7 @@ QUESTION: ${args.question}`;
                         `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill. ` +
                         `Fix your <tool_call> and use an exact tool name from the list.`,
                 };
+            }
         }
     }
 }

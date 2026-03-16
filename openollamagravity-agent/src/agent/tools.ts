@@ -32,17 +32,20 @@ interface PlanItem {
 }
 
 let currentPlan: PlanItem[] = [];
+let _planIdCounter = 0;
 
-export async function managePlan(args: any): Promise<ToolResult> {
+export function managePlan(args: any): ToolResult {
   const { action, task, id } = args;
 
   if (action === 'clear') {
     currentPlan = [];
+    _planIdCounter = 0;
     return { ok: true, output: 'Plan cleared.' };
   }
 
   if (action === 'create' && task) {
-    currentPlan.push({ id: currentPlan.length + 1, task, status: 'open' });
+    _planIdCounter++;
+    currentPlan.push({ id: _planIdCounter, task, status: 'open' });
     return { ok: true, output: `Task added.\n${formatPlan()}` };
   }
 
@@ -106,7 +109,15 @@ export function getSkillsPath(): string {
   return vscode.workspace.getConfiguration('openollamagravity').get<string>('skillsPath', '');
 }
 
+const _skillsCache: Map<string, { files: string[], ts: number }> = new Map();
+const SKILLS_CACHE_TTL = 30_000;
+
 function scanSkillFolders(skillsPath: string): string[] {
+  const cached = _skillsCache.get(skillsPath);
+  if (cached && (Date.now() - cached.ts) < SKILLS_CACHE_TTL) {
+    return cached.files;
+  }
+
   const skillMd: string[] = [];
   const legacyMd: string[] = [];
 
@@ -130,7 +141,9 @@ function scanSkillFolders(skillsPath: string): string[] {
   }
 
   walk(skillsPath);
-  return skillMd.length > 0 ? skillMd : legacyMd;
+  const files = skillMd.length > 0 ? skillMd : legacyMd;
+  _skillsCache.set(skillsPath, { files, ts: Date.now() });
+  return files;
 }
 
 function readFrontmatter(filePath: string): string | null {
@@ -568,7 +581,7 @@ export async function saveSkill(
 function getPerplexicaUrl(): string {
   return vscode.workspace
       .getConfiguration('openollamagravity')
-      .get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
+      .get<string>('perplexicaUrl', 'http://localhost:3030');
 }
 
 // ── PERPLEXICA PROVIDERS CACHE ────────────────────────────────────────────────
@@ -782,22 +795,31 @@ const READ_FILE_MAX_BYTES = 100 * 1024;
 export async function readFile(args: any): Promise<ToolResult> {
   try {
     const abs = resolvePath(args.path);
+    if (!fs.existsSync(abs)) return { ok: false, output: `File not found: ${args.path}` };
     const stat = fs.statSync(abs);
+    const content = fs.readFileSync(abs, 'utf8');
+
+    if (args.start_line !== undefined || args.end_line !== undefined) {
+      const lines = content.split('\n');
+      const start = Math.max(0, (args.start_line || 1) - 1);
+      const end   = Math.min(lines.length, args.end_line || lines.length);
+      const slice = lines.slice(start, end);
+      return {
+        ok: true,
+        output: slice.join('\n') || '[Nothing in this line range]'
+      };
+    }
+
     if (stat.size > READ_FILE_MAX_BYTES) {
-      const fd  = fs.openSync(abs, 'r');
-      const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
-      const n   = fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
-      fs.closeSync(fd);
-      const preview = buf.subarray(0, n).toString('utf8');
       return {
         ok: true,
         output:
-            preview +
+            content.slice(0, READ_FILE_MAX_BYTES) +
             `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
             ` Use specific line ranges if you need more.]`,
       };
     }
-    return { ok: true, output: fs.readFileSync(abs, 'utf8') };
+    return { ok: true, output: content };
   } catch (e: any) { return { ok: false, output: e.message }; }
 }
 
@@ -936,7 +958,12 @@ export async function searchFiles(args: any): Promise<ToolResult> {
     const relativePattern = new vscode.RelativePattern(searchBaseUri, pattern);
     const files = await vscode.workspace.findFiles(relativePattern, '**/node_modules/**', 500);
 
-    const regex = new RegExp(args.pattern, 'i');
+    let regex: RegExp;
+    try {
+      regex = new RegExp(args.pattern, 'i');
+    } catch (e: any) {
+      return { ok: false, output: `Invalid regex pattern: ${e.message}` };
+    }
     const results: string[] = [];
     const rootFsPath = rootFolder.uri.fsPath;
 
@@ -978,7 +1005,7 @@ export async function getDiagnostics(args: any): Promise<ToolResult> {
       for (const d of fileDiags) {
         const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' :
             d.severity === vscode.DiagnosticSeverity.Warning ? 'WARN' : 'INFO';
-        result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'uknown'})`);
+        result.push(`[${severity}] Line ${d.range.start.line + 1}: ${d.message} (${d.source || 'unknown'})`);
       }
     }
     return { ok: true, output: result.length > 0 ? result.join('\n') : 'No diagnostics found. Everything looks clean!' };

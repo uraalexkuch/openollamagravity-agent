@@ -199,7 +199,12 @@ export class AgentLoop {
 
   on(fn: (ev: AgentEvent) => void)  { this._listeners.push(fn); }
   off(fn: (ev: AgentEvent) => void) { this._listeners = this._listeners.filter(l => l !== fn); }
-  private emit(ev: AgentEvent)      { this._listeners.forEach(l => l(ev)); }
+  private emit(ev: AgentEvent)      {
+    if (this._listeners.length > 20) {
+      oogLogger.appendLine(`[Agent] ⚠️ Too many listeners (${this._listeners.length}). Possible memory leak.`);
+    }
+    this._listeners.forEach(l => l(ev));
+  }
 
   stop()         { this._abortCtrl?.abort(); this.running = false; }
   clearHistory() {
@@ -221,9 +226,9 @@ export class AgentLoop {
     try {
       this._abortCtrl = new AbortController();
     const signal    = this._abortCtrl.signal;
-    const maxSteps  = vscode.workspace
-        .getConfiguration('openollamagravity')
-        .get<number>('maxAgentSteps', 25);
+    const config    = vscode.workspace.getConfiguration('openollamagravity');
+    const maxSteps  = config.get<number>('maxAgentSteps', 25);
+    const timeoutMs = config.get<number>('firstTokenTimeoutSec', 180) * 1000;
 
     const resolvedRoot = workspaceRoot
         || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
@@ -267,6 +272,7 @@ export class AgentLoop {
     }
 
     this._history.push({ role: 'user', content: task });
+    this._trimHistory();
 
     for (let step = 1; step <= maxSteps; step++) {
       if (signal.aborted) break;
@@ -274,7 +280,7 @@ export class AgentLoop {
 
       let output = '';
       try {
-        output = await this._streamWithTimeout(step, maxSteps, signal);
+        output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
       } catch (err: any) {
         this.emit({ type: 'error', content: err.message });
         break;
@@ -375,40 +381,69 @@ export class AgentLoop {
       });
     }
 
-    this.running = false;
-    this.emit({ type: 'done', content: '' });
+    } finally {
+      this.running = false;
+      this.emit({ type: 'done', content: '' });
+    }
+  }
+
+  private _trimHistory() {
+    // Keep system prompt + last 10 pairs (20 messages)
+    if (this._history.length > 22) {
+      const sys = this._history[0];
+      const recent = this._history.slice(-20);
+      this._history = [sys, ...recent];
+      oogLogger.appendLine(`[Agent] History trimmed to ${this._history.length} messages.`);
+    }
   }
 
   private async _streamWithTimeout(
       step: number,
       total: number,
+      initialMs: number,
       signal: AbortSignal
   ): Promise<string> {
-    const ms = vscode.workspace
-        .getConfiguration('openollamagravity')
-        .get<number>('firstTokenTimeoutSec', 180) * 1000;
+    const chunkTimeoutMs = 30000; // Watchdog: 30s between chunks
 
     return new Promise((resolve, reject) => {
       let started = false;
-      const timer = setTimeout(() => {
+      let watchdog: NodeJS.Timeout | undefined;
+
+      const resetWatchdog = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(() => {
+          reject(new Error('Streaming stalled: No chunks received for 30s.'));
+        }, chunkTimeoutMs);
+      };
+
+      const initialTimer = setTimeout(() => {
         if (!started) {
           reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
         }
-      }, ms);
+      }, initialMs);
 
       this._ollama
           .chatStream(
               this._history,
               chunk => {
-                started = true;
-                clearTimeout(timer);
+                if (!started) {
+                  started = true;
+                  clearTimeout(initialTimer);
+                }
+                resetWatchdog();
                 this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
               },
               signal,
               this.model
           )
-          .then(resolve)
-          .catch(reject);
+          .then(res => {
+            if (watchdog) clearTimeout(watchdog);
+            resolve(res);
+          })
+          .catch(err => {
+            if (watchdog) clearTimeout(watchdog);
+            reject(err);
+          });
     });
   }
 
@@ -432,13 +467,15 @@ export class AgentLoop {
       case 'read_skill':       return Tools.readSkill(args);
       case 'web_search':       return Tools.webSearch(args);
 
-      case 'manage_plan':
+      case 'manage_plan': {
         return Tools.managePlan(args);
+      }
 
-      case 'save_skill':
+      case 'save_skill': {
         return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
+      }
 
-      case 'delegate_to_expert':
+      case 'delegate_to_expert': {
         if (!args.role || !args.question) return { ok: false, output: 'Missing role or question' };
 
         this.emit({ type: 'narration', content: `👥 Swarm: Звертаюсь до субагента [${args.role}]...` });
@@ -449,13 +486,14 @@ CONTEXT: ${args.context || 'None provided'}
 QUESTION: ${args.question}`;
 
         try {
-          const answer = await this._ollama.generate(subPrompt, 4096, undefined);
+          const answer = await this._ollama.generate(subPrompt, 4096);
           return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
         } catch (e: any) {
           return { ok: false, output: `Expert failed: ${e.message}` };
         }
+      }
 
-      default:
+      default: {
         return {
           ok: false,
           output:
@@ -464,6 +502,7 @@ QUESTION: ${args.question}`;
               `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill. ` +
               `Fix your <tool_call> and use an exact tool name from the list.`,
         };
+      }
     }
   }
 }
