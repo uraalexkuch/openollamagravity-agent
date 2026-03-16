@@ -142,6 +142,7 @@ export class OllamaClient {
         req.destroy(); 
         reject(new Error('Aborted')); 
       });
+      if (signal?.aborted) { req.destroy(); reject(new Error('Aborted')); return; }
       req.write(body); req.end();
     });
   }
@@ -198,6 +199,7 @@ export class OllamaClient {
       // Прив'язка скасування HTTP запиту до AbortController
       signal?.addEventListener('abort', () => { req.destroy(); rej(new Error('Aborted')); });
 
+      if (signal?.aborted) { req.destroy(); rej(new Error('Aborted')); return; }
       req.write(b); req.end();
     });
   }

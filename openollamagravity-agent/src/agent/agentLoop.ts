@@ -27,7 +27,6 @@ export interface AgentEvent {
   skills?:     Array<{ name: string; folderName: string; description: string; score: number }>;
   signals?:    string[];
 }
-
 function buildSystemPrompt(
     language:         string,
     skills:           LoadedSkill[],
@@ -56,6 +55,8 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 3. Language: Always respond in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
 5. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools (e.g., read_file, list_files, get_workspace_info). DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
+7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
@@ -76,7 +77,6 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 - list_skills(), read_skill(name): View best practices.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
-
 function repairJson(raw: string): string {
   // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
   let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
@@ -148,9 +148,8 @@ function parseToolCall(text: string): {
   const inner = block[1];
 
   const nameMatch =
-      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
       inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
-      inner.match(/<name>\s*([\w_]+)\s*<\/n>/i); // malformed fallback
+      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i); // true fallback
   if (!nameMatch) return null;
   const name = nameMatch[1].trim();
 
@@ -487,6 +486,9 @@ Your goal is to answer the following request from the Main Agent.
 CONTEXT: ${args.context || 'None provided'}
 QUESTION: ${args.question}`;
 
+        const subAbort = new AbortController();
+        const subTimer = setTimeout(() => subAbort.abort(), 60_000);
+
         try {
           const answer = await this._ollama.chatStream(
               [{ role: 'user', content: subPrompt }],
@@ -494,10 +496,12 @@ QUESTION: ${args.question}`;
                 // Пряме прокидання "думання" субагента в основний потік не робимо,
                 // щоб не плутати користувача, але можна додати логування.
               },
-              this._abortCtrl?.signal
+              subAbort.signal
           );
+          clearTimeout(subTimer);
           return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
         } catch (e: any) {
+          clearTimeout(subTimer);
           return { ok: false, output: `Expert failed: ${e.message}` };
         }
       }

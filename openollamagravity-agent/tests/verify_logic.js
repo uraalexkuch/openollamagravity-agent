@@ -15,9 +15,8 @@ function parseToolCall(text) {
   const inner = block[1];
 
   const nameMatch =
-      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
       inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
-      inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
+      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i); // true fallback
   if (!nameMatch) return null;
   const name = nameMatch[1].trim();
 
@@ -57,9 +56,9 @@ function testParser() {
       expectedName: "read_file"
     },
     {
-      name: "Malformed mixed format",
+      name: "Malformed mixed format (should fail now)",
       input: "<tool_call><n>search_files</name><args>{}</args></tool_call>",
-      expectedName: "search_files"
+      expectedName: null
     },
     {
       name: "No tool call",

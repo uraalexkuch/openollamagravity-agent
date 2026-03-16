@@ -578,6 +578,7 @@ function httpGet(url: URL): Promise<string> {
         (res: any) => {
           let d = '';
           res.on('data', (c: Buffer) => { d += c.toString(); });
+          res.on('error', reject);
           res.on('end', () => resolve(d));
         }
     );

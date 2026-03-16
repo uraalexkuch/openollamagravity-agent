@@ -37,6 +37,7 @@ exports.managePlan = managePlan;
 exports.getAllSkills = getAllSkills;
 exports.getSkillsPath = getSkillsPath;
 exports.scanAndScoreAllSkillsIdf = scanAndScoreAllSkillsIdf;
+exports.loadTopSkills = loadTopSkills;
 exports.autoLoadSkillsForTask = autoLoadSkillsForTask;
 exports.discoverSkillsFromContext = discoverSkillsFromContext;
 exports.saveSkill = saveSkill;
