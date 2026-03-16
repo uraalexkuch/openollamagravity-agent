@@ -33,12 +33,14 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.managePlan = managePlan;
 exports.getAllSkills = getAllSkills;
 exports.getSkillsPath = getSkillsPath;
 exports.scanAndScoreAllSkillsIdf = scanAndScoreAllSkillsIdf;
 exports.loadTopSkills = loadTopSkills;
 exports.autoLoadSkillsForTask = autoLoadSkillsForTask;
 exports.discoverSkillsFromContext = discoverSkillsFromContext;
+exports.saveSkill = saveSkill;
 exports.webSearch = webSearch;
 exports.readFile = readFile;
 exports.writeFile = writeFile;
@@ -61,6 +63,36 @@ const cp = __importStar(require("child_process"));
 const client_1 = require("../ollama/client");
 const http = __importStar(require("http"));
 const https = __importStar(require("https"));
+let currentPlan = [];
+async function managePlan(args) {
+    const { action, task, id } = args;
+    if (action === 'clear') {
+        currentPlan = [];
+        return { ok: true, output: 'Plan cleared.' };
+    }
+    if (action === 'create' && task) {
+        currentPlan.push({ id: currentPlan.length + 1, task, status: 'open' });
+        return { ok: true, output: `Task added.\n${formatPlan()}` };
+    }
+    if (action === 'complete' && id !== undefined) {
+        const t = currentPlan.find(p => p.id === Number(id));
+        if (t) {
+            t.status = 'done';
+            return { ok: true, output: `Task ${id} completed.\n${formatPlan()}` };
+        }
+        return { ok: false, output: `Task ID ${id} not found.` };
+    }
+    if (action === 'view') {
+        return { ok: true, output: formatPlan() };
+    }
+    return { ok: false, output: 'Invalid action. Use create, complete, view, or clear.' };
+}
+function formatPlan() {
+    if (currentPlan.length === 0)
+        return 'The plan is empty. Use "create" to add tasks.';
+    return 'CURRENT PLAN:\n' + currentPlan.map(p => `[${p.status === 'done' ? 'X' : ' '}] ${p.id}. ${p.task}`).join('\n');
+}
+// -----------------------------------------
 async function getAllSkills() {
     const skillsPath = getSkillsPath();
     if (!skillsPath || !fs.existsSync(skillsPath))
@@ -487,15 +519,38 @@ async function discoverSkillsFromContext(toolName, content, alreadyLoaded, maxNe
     const newScored = scanAndScoreAllSkills(contextTokens, alreadyLoaded, minScore);
     return { skills: loadTopSkills(newScored, maxNew), contextTokens };
 }
+// --- DEEP AGENTS: Auto-Skill Generation (Reflection) ---
+async function saveSkill(args, onConfirm) {
+    try {
+        const { name, description, content } = args;
+        if (!name || !content)
+            return { ok: false, output: 'Missing "name" or "content".' };
+        const sp = getSkillsPath();
+        if (!sp || !fs.existsSync(sp))
+            return { ok: false, output: 'Skills path not configured or not found.' };
+        const folderName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        const skillDir = path.join(sp, folderName);
+        const fileContent = `---\nname: ${name}\ndescription: ${description || ''}\ntags: [auto-generated]\n---\n\n${content}`;
+        if (!await onConfirm(name, fileContent)) {
+            return { ok: false, output: 'User rejected saving the skill.' };
+        }
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), fileContent, 'utf8');
+        return { ok: true, output: `Skill "${name}" saved successfully to ${folderName}/SKILL.md in the knowledge base!` };
+    }
+    catch (e) {
+        return { ok: false, output: `Failed to save skill: ${e.message}` };
+    }
+}
+// -------------------------------------------------------
 function getPerplexicaUrl() {
     return vscode.workspace
         .getConfiguration('openollamagravity')
-        .get('perplexicaUrl', '[http://10.1.0.138:3030](http://10.1.0.138:3030)');
+        .get('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 /** 🌐 WEB SEARCH через Perplexica */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
-    // Очищення запиту від спецсимволів
     query = query.replace(/[@#$]/g, ' ');
     let website = args?.website || args?.domain;
     if (website) {
@@ -506,7 +561,6 @@ async function webSearch(args) {
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
     client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
-    // ДИНАМІЧНО отримуємо поточну модель
     const activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model', 'llama3.1');
     return new Promise((promiseResolve) => {
         try {
@@ -515,7 +569,7 @@ async function webSearch(args) {
             const bodyData = JSON.stringify({
                 query,
                 focusMode: args.focusMode || 'webSearch',
-                sources: ['web'], // Обов'язково
+                sources: ['web'],
                 optimizationMode: 'speed',
                 history: [],
                 chatModel: {
@@ -815,7 +869,6 @@ async function getFileOutline(args) {
         if (!args.path)
             return { ok: false, output: 'Missing path.' };
         const abs = resolvePath(args.path);
-        // Жорсткий захист від папок
         if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
             return {
                 ok: false,

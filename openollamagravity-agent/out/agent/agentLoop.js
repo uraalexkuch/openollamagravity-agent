@@ -60,6 +60,9 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 5. Workflow: THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
 
 ### TOOLS:
+- manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
+- delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
+- save_skill(name, description, content): Save a new skill (best practice, code snippet, or lesson learned) to the knowledge base for future use.
 - read_file(path, start_line?, end_line?): Read file content.
 - write_file(path, content): Create/Overwrite file.
 - edit_file(path, start_line, end_line, new_content): Replace lines.
@@ -76,26 +79,32 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 function repairJson(raw) {
-    let result = '';
+    // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
+    let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
+    // 2. Змінюємо одинарні лапки на подвійні для значень
+    result = result.replace(/:\s*'([^']*)'/g, (_, inner) => ': "' + inner.replace(/"/g, '\\"') + '"');
+    result = result.replace(/,\s*'([^']*)'/g, (_, inner) => ', "' + inner.replace(/"/g, '\\"') + '"');
+    // 3. Виправляємо одинарні бекслеші у шляхах Windows
+    let finalResult = '';
     let inString = false;
     let i = 0;
-    while (i < raw.length) {
-        const ch = raw[i];
+    while (i < result.length) {
+        const ch = result[i];
         if (!inString) {
             if (ch === '"') {
                 inString = true;
             }
-            result += ch;
+            finalResult += ch;
             i++;
             continue;
         }
         if (ch === '\\') {
-            const next = raw[i + 1] ?? '';
+            const next = result[i + 1] ?? '';
             if (/["\\\/bfnrtu]/.test(next)) {
-                result += ch + next;
+                finalResult += ch + next;
             }
             else {
-                result += '\\\\' + next;
+                finalResult += '\\\\' + next;
             }
             i += 2;
             continue;
@@ -103,10 +112,10 @@ function repairJson(raw) {
         if (ch === '"') {
             inString = false;
         }
-        result += ch;
+        finalResult += ch;
         i++;
     }
-    return result;
+    return finalResult;
 }
 function parseToolCall(text) {
     const block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
@@ -159,7 +168,8 @@ class AgentLoop {
     clearHistory() {
         this._history = [];
         this._loadedFolders.clear();
-        client_1.oogLogger.appendLine('[Agent] Історію очищено.');
+        Tools.managePlan({ action: 'clear' }); // Очищення пам'яті плану
+        client_1.oogLogger.appendLine('[Agent] Історію та план очищено.');
     }
     async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '', selectedSkillFolders = []) {
         this.running = true;
@@ -222,7 +232,8 @@ class AgentLoop {
                 const toolNames = [
                     'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
                     'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
-                    'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill'
+                    'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
+                    'manage_plan', 'delegate_to_expert', 'save_skill'
                 ];
                 const forgottenTool = toolNames.find(tn => output.includes(tn));
                 if (isBrokenTags || (forgottenTool && output.length < 500)) {
@@ -334,12 +345,33 @@ class AgentLoop {
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
             case 'web_search': return Tools.webSearch(args);
+            // --- ДОДАНО: DEEP AGENTS FEATURES ---
+            case 'manage_plan':
+                return Tools.managePlan(args);
+            case 'save_skill':
+                return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
+            case 'delegate_to_expert':
+                if (!args.role || !args.question)
+                    return { ok: false, output: 'Missing role or question' };
+                this.emit({ type: 'narration', content: `👥 Swarm: Звертаюсь до субагента [${args.role}]...` });
+                const subPrompt = `You are an expert AI sub-agent with the role: ${args.role}. 
+Your goal is to answer the following request from the Main Agent.
+CONTEXT: ${args.context || 'None provided'}
+QUESTION: ${args.question}`;
+                try {
+                    const answer = await this._ollama.generate(subPrompt, 4096, undefined);
+                    return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
+                }
+                catch (e) {
+                    return { ok: false, output: `Expert failed: ${e.message}` };
+                }
+            // ------------------------------------
             default:
                 return {
                     ok: false,
                     output: `CRITICAL ERROR: Unknown tool "${name}". ` +
                         `Valid tools: read_file, write_file, edit_file, list_files, search_files, run_terminal, ` +
-                        `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search. ` +
+                        `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill. ` +
                         `Fix your <tool_call> and use an exact tool name from the list.`,
                 };
         }

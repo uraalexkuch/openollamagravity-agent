@@ -2,7 +2,7 @@
   "name": "openollamagravity-agent",
   "displayName": "OpenOllamaGravity Agent",
   "description": "Автономний AI-агент для програмування на базі Ollama",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "publisher": "yuriikucherenko",
   "author": "Юрій Кучеренко",
   "repository": {
