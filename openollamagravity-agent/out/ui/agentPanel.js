@@ -42,9 +42,17 @@ const context_1 = require("../workspace/context");
 const Tools = __importStar(require("../agent/tools"));
 const fs = __importStar(require("fs"));
 class AgentPanel {
-    static show(extensionUri, ollama, forceNew = false) {
+    static show(extensionUri, ollama, forceNew = false, initialTask) {
         if (!forceNew && AgentPanel.panels.length > 0) {
-            AgentPanel.panels[AgentPanel.panels.length - 1]._panel.reveal(vscode.ViewColumn.Beside);
+            const p = AgentPanel.panels[AgentPanel.panels.length - 1];
+            if (initialTask) {
+                p._initialTask = initialTask;
+                p._panel.reveal(vscode.ViewColumn.Beside);
+                p._post({ type: 'ready' }); // Trigger re-read of skills/models and potential initial task
+            }
+            else {
+                p._panel.reveal(vscode.ViewColumn.Beside);
+            }
             return;
         }
         const panel = vscode.window.createWebviewPanel('openollamagravity.agent', '⚡ OpenOllamaGravity', vscode.ViewColumn.Beside, {
@@ -52,14 +60,15 @@ class AgentPanel {
             retainContextWhenHidden: true,
             localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources')],
         });
-        const newPanel = new AgentPanel(panel, ollama, extensionUri);
+        const newPanel = new AgentPanel(panel, ollama, extensionUri, initialTask);
         AgentPanel.panels.push(newPanel);
     }
-    constructor(panel, ollama, extensionUri) {
+    constructor(panel, ollama, extensionUri, initialTask) {
         this._disposables = [];
         this._agentListener = null;
         this._panel = panel;
         this._loop = new agentLoop_1.AgentLoop(ollama);
+        this._initialTask = initialTask;
         const iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'icon.svg');
         const iconUri = panel.webview.asWebviewUri(iconPath);
         this._panel.webview.html = this._getHtml(extensionUri, iconUri);
@@ -94,6 +103,11 @@ class AgentPanel {
                             current: this._loop.model || activeModel,
                             skills: skillsResult.map(s => ({ name: s.name, folderName: s.folderName, description: s.description }))
                         });
+                        if (this._initialTask) {
+                            const task = this._initialTask;
+                            this._initialTask = undefined;
+                            await this._runTask(task);
+                        }
                     }
                     catch { /* */ }
                     break;
@@ -165,7 +179,7 @@ class AgentPanel {
         vscode.commands.executeCommand('setContext', 'openollamagravity.running', false).then(null, console.error);
     }
     _getHtml(extensionUri, iconUri) {
-        const htmlPath = vscode.Uri.joinPath(extensionUri, 'src', 'ui', 'agentPanel.html').fsPath;
+        const htmlPath = vscode.Uri.joinPath(extensionUri, 'resources', 'agentPanel.html').fsPath;
         let html = fs.readFileSync(htmlPath, 'utf8');
         return html.replace(/\${iconUri}/g, iconUri.toString());
     }

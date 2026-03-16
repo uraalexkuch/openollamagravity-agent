@@ -11,6 +11,7 @@ import * as https from 'https';
 import { OllamaClient } from './ollama/client';
 import { AgentPanel } from './ui/agentPanel';
 import { InlineCompletionProvider } from './inlineCompletion';
+import { gatherContext, getActiveFileContent } from './workspace/context';
 
 let statusBar: vscode.StatusBarItem;
 
@@ -171,6 +172,41 @@ export async function activate(context: vscode.ExtensionContext) {
   reg(context, 'openollamagravity.openAgent', () => AgentPanel.show(context.extensionUri, ollama));
   reg(context, 'openollamagravity.newTask',   () => AgentPanel.show(context.extensionUri, ollama, true));
   reg(context, 'openollamagravity.stopAgent', () => [...AgentPanel.panels].forEach(p => p.dispose()));
+
+  reg(context, 'openollamagravity.explainFile', () => {
+    const ctx = gatherContext();
+    const content = getActiveFileContent();
+    const prompt = `Поясни структуру та логіку цього файлу:\n\n${content}\n\nКонтекст:\n${ctx}`;
+    AgentPanel.show(context.extensionUri, ollama, false, prompt);
+  });
+
+  reg(context, 'openollamagravity.fixSelection', () => {
+    const ctx = gatherContext();
+    const prompt = `Знайди та виправ помилки у виділеному коді. Поясни, що було не так і як ти це виправив.\n\nКонтекст:\n${ctx}`;
+    AgentPanel.show(context.extensionUri, ollama, false, prompt);
+  });
+
+  reg(context, 'openollamagravity.refactor', () => {
+    const ctx = gatherContext();
+    const prompt = `Зроби рефакторинг виділеного коду: покращи читабельність, оптимізуй логіку, дотримуйся чистих паттернів (Clean Code).\n\nКонтекст:\n${ctx}`;
+    AgentPanel.show(context.extensionUri, ollama, false, prompt);
+  });
+
+  reg(context, 'openollamagravity.writeTests', () => {
+    const ctx = gatherContext();
+    const prompt = `Напиши Unit-тести для виділеного коду (використовуй Jest або Mocha, якщо не вказано інше).\n\nКонтекст:\n${ctx}`;
+    AgentPanel.show(context.extensionUri, ollama, false, prompt);
+  });
+
+  reg(context, 'openollamagravity.implement', () => {
+    const ctx = gatherContext();
+    const prompt = `Реалізуй функціонал на основі коментарів або стабів у виділеному коді.\n\nКонтекст:\n${ctx}`;
+    AgentPanel.show(context.extensionUri, ollama, false, prompt);
+  });
+
+  reg(context, 'openollamagravity.syncSkills', () => {
+    syncSkills(repoPath, skillsPath, context).catch(console.error);
+  });
 
   reg(context, 'openollamagravity.selectModel', async () => {
     let models: string[] = [];

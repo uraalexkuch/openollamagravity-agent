@@ -503,7 +503,7 @@ Licensed under the MIT License. See LICENSE file in the project root for full li
     if (!text || isRunning) return;
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    vscode.postMessage({ type: 'task', text: text, lang: currentLang });
+    vscode.postMessage({ type: 'run_task', text: text, lang: currentLang });
   }
 
   function hideEmpty() {

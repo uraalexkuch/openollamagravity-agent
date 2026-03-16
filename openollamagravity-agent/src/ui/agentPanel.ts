@@ -22,10 +22,18 @@ export class AgentPanel {
   private _loop: AgentLoop;
   private _disposables: vscode.Disposable[] = [];
   private _agentListener: ((ev: AgentEvent) => void) | null = null;
+  private _initialTask?: string;
 
-  static show(extensionUri: vscode.Uri, ollama: OllamaClient, forceNew = false) {
+  static show(extensionUri: vscode.Uri, ollama: OllamaClient, forceNew = false, initialTask?: string) {
     if (!forceNew && AgentPanel.panels.length > 0) {
-      AgentPanel.panels[AgentPanel.panels.length - 1]._panel.reveal(vscode.ViewColumn.Beside);
+      const p = AgentPanel.panels[AgentPanel.panels.length - 1];
+      if (initialTask) {
+        p._initialTask = initialTask;
+        p._panel.reveal(vscode.ViewColumn.Beside);
+        p._post({ type: 'ready' }); // Trigger re-read of skills/models and potential initial task
+      } else {
+        p._panel.reveal(vscode.ViewColumn.Beside);
+      }
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -38,13 +46,14 @@ export class AgentPanel {
           localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources')],
         }
     );
-    const newPanel = new AgentPanel(panel, ollama, extensionUri);
+    const newPanel = new AgentPanel(panel, ollama, extensionUri, initialTask);
     AgentPanel.panels.push(newPanel);
   }
 
-  private constructor(panel: vscode.WebviewPanel, ollama: OllamaClient, extensionUri: vscode.Uri) {
+  private constructor(panel: vscode.WebviewPanel, ollama: OllamaClient, extensionUri: vscode.Uri, initialTask?: string) {
     this._panel = panel;
     this._loop = new AgentLoop(ollama);
+    this._initialTask = initialTask;
 
     const iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'icon.svg');
     const iconUri = panel.webview.asWebviewUri(iconPath);
@@ -85,6 +94,12 @@ export class AgentPanel {
               current: this._loop.model || activeModel,
               skills: skillsResult.map(s => ({ name: s.name, folderName: s.folderName, description: s.description }))
             });
+
+            if (this._initialTask) {
+              const task = this._initialTask;
+              this._initialTask = undefined;
+              await this._runTask(task);
+            }
           } catch { /* */ }
           break;
         case 'set_model':

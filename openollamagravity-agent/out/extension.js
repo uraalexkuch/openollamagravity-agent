@@ -47,6 +47,7 @@ const https = __importStar(require("https"));
 const client_1 = require("./ollama/client");
 const agentPanel_1 = require("./ui/agentPanel");
 const inlineCompletion_1 = require("./inlineCompletion");
+const context_1 = require("./workspace/context");
 let statusBar;
 /** Повертає папку Документи незалежно від ОС */
 function getDocumentsPath() {
@@ -168,6 +169,35 @@ async function activate(context) {
     reg(context, 'openollamagravity.openAgent', () => agentPanel_1.AgentPanel.show(context.extensionUri, ollama));
     reg(context, 'openollamagravity.newTask', () => agentPanel_1.AgentPanel.show(context.extensionUri, ollama, true));
     reg(context, 'openollamagravity.stopAgent', () => [...agentPanel_1.AgentPanel.panels].forEach(p => p.dispose()));
+    reg(context, 'openollamagravity.explainFile', () => {
+        const ctx = (0, context_1.gatherContext)();
+        const content = (0, context_1.getActiveFileContent)();
+        const prompt = `Поясни структуру та логіку цього файлу:\n\n${content}\n\nКонтекст:\n${ctx}`;
+        agentPanel_1.AgentPanel.show(context.extensionUri, ollama, false, prompt);
+    });
+    reg(context, 'openollamagravity.fixSelection', () => {
+        const ctx = (0, context_1.gatherContext)();
+        const prompt = `Знайди та виправ помилки у виділеному коді. Поясни, що було не так і як ти це виправив.\n\nКонтекст:\n${ctx}`;
+        agentPanel_1.AgentPanel.show(context.extensionUri, ollama, false, prompt);
+    });
+    reg(context, 'openollamagravity.refactor', () => {
+        const ctx = (0, context_1.gatherContext)();
+        const prompt = `Зроби рефакторинг виділеного коду: покращи читабельність, оптимізуй логіку, дотримуйся чистих паттернів (Clean Code).\n\nКонтекст:\n${ctx}`;
+        agentPanel_1.AgentPanel.show(context.extensionUri, ollama, false, prompt);
+    });
+    reg(context, 'openollamagravity.writeTests', () => {
+        const ctx = (0, context_1.gatherContext)();
+        const prompt = `Напиши Unit-тести для виділеного коду (використовуй Jest або Mocha, якщо не вказано інше).\n\nКонтекст:\n${ctx}`;
+        agentPanel_1.AgentPanel.show(context.extensionUri, ollama, false, prompt);
+    });
+    reg(context, 'openollamagravity.implement', () => {
+        const ctx = (0, context_1.gatherContext)();
+        const prompt = `Реалізуй функціонал на основі коментарів або стабів у виділеному коді.\n\nКонтекст:\n${ctx}`;
+        agentPanel_1.AgentPanel.show(context.extensionUri, ollama, false, prompt);
+    });
+    reg(context, 'openollamagravity.syncSkills', () => {
+        syncSkills(repoPath, skillsPath, context).catch(console.error);
+    });
     reg(context, 'openollamagravity.selectModel', async () => {
         let models = [];
         try {
