@@ -614,6 +614,11 @@ Licensed under the MIT License. See LICENSE file in the project root for full li
     if (!text || isRunning) return;
     inputEl.value = '';
     inputEl.style.height = 'auto';
+    
+    // Hide skills UI
+    skillsContainer.style.display = 'none';
+    btnSkills.classList.remove('active');
+
     var sk = Array.from(selectedSkills);
     vscode.postMessage({
       type: 'run_task',
