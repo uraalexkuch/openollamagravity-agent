@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Юрій Кучеренко.
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { OllamaClient, OllamaMessage, oogLogger } from '../ollama/client';
 import * as Tools from './tools';
 import type { LoadedSkill } from './tools';
@@ -65,22 +66,23 @@ Put your multi-line content here without escaping quotes or newlines.
 
 3. Language & Translation: The user may provide tasks in various languages. You MUST internally translate the user's request into English to plan your actions and use tools accurately. However, you MUST ALWAYS provide your final explanations, narrations, and direct answers to the user in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
-5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
+5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done.
 6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
-7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
+7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository.
 
 ### TOOLS:
-- manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
-- delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description): Save a new skill. CRITICAL: Put the actual skill text INSIDE a <content>...</content> block AFTER <args>. Do NOT put it in JSON.
+- manage_plan(action, task?, id?): Manage your multi-step plan.
+- delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent.
+- run_chatdev_team(task, output_dir): Orchestrate a virtual software company (CTO -> Programmer -> Reviewer -> TechWriter).
+- save_skill(name, description): Save a new reusable skill.
 - read_file(path, start_line?, end_line?): Read file content.
-- write_file(path): Create/Overwrite file. CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
-- edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
+- write_file(path): Create/Overwrite file. Use <content> block for the body.
+- edit_file(path, start_line, end_line): Replace lines. Use <content> block for the new text.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.
-- run_terminal(command, cwd?): Run shell commands. CRITICAL: NEVER run blocking server commands (like "npm start" or "dev"). Only run tasks that finish and exit.
+- run_terminal(command, cwd?): Run shell commands.
 - get_diagnostics(path?): Get IDE errors.
-- get_file_outline(path): List functions/classes in a SPECIFIC FILE. (NEVER pass a directory/folder).
+- get_file_outline(path): List functions/classes in a file.
 - create_directory(path): Create folders.
 - delete_file(path): Delete file.
 - get_workspace_info(path?): Project metadata (deps, scripts).
@@ -90,18 +92,13 @@ ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 
 function repairJson(raw: string): string {
-  // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
   let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
-
-  // 2. Змінюємо одинарні лапки на подвійні для значень
   result = result.replace(/:\s*'([^']*)'/g, (_, inner) => ': "' + inner.replace(/"/g, '\\"') + '"');
   result = result.replace(/,\s*'([^']*)'/g, (_, inner) => ', "' + inner.replace(/"/g, '\\"') + '"');
 
-  // 3. Виправляємо одинарні бекслеші у шляхах Windows та перенесення рядків
   let finalResult = '';
   let inString = false;
   let i = 0;
-
   while (i < result.length) {
     const ch = result[i];
     if (!inString) {
@@ -110,38 +107,20 @@ function repairJson(raw: string): string {
       i++;
       continue;
     }
-
-    if (ch === '\n') {
-      finalResult += '\\n';
-      i++;
-      continue;
-    }
-    if (ch === '\r') {
-      i++;
-      continue;
-    }
-    if (ch === '\t') {
-      finalResult += '\\t';
-      i++;
-      continue;
-    }
-
+    if (ch === '\n') { finalResult += '\\n'; i++; continue; }
+    if (ch === '\r') { i++; continue; }
+    if (ch === '\t') { finalResult += '\\t'; i++; continue; }
     if (ch === '\\') {
       const next = result[i + 1] ?? '';
-      if (/["\\\/bfnrtu]/.test(next)) {
-        finalResult += ch + next;
-      } else {
-        finalResult += '\\\\' + next;
-      }
+      if (/["\\\/bfnrtu]/.test(next)) finalResult += ch + next;
+      else finalResult += '\\\\' + next;
       i += 2;
       continue;
     }
-
     if (ch === '"') { inString = false; }
     finalResult += ch;
     i++;
   }
-
   return finalResult;
 }
 
@@ -156,31 +135,23 @@ function parseToolCall(text: string): {
 
   const blockStart = text.indexOf('<tool_call>');
   const narration  = text.slice(0, blockStart).trim();
-
   const inner = block[1];
 
-  const nameMatch =
-      inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
-      inner.match(/<name>\s*([\w_]+)\s*<\/name>/i); // true fallback
+  const nameMatch = inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) || inner.match(/<name>\s*([\w_]+)\s*<\/name>/i);
   if (!nameMatch) return null;
   const name = nameMatch[1].trim();
 
-  // 1. Витягуємо вміст з <content>...</content>, якщо він є
   const contentMatch = inner.match(/<content>([\s\S]*?)<\/content>/i) || inner.match(/<content>([\s\S]*)/i);
   const extractedContent = contentMatch ? contentMatch[1].trim() : null;
 
-  // 2. Витягуємо JSON з <args>
   let raw = '';
   const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
-
   if (argsMatch) {
     raw = argsMatch[1].trim();
   } else {
     const fallbackMatch = inner.match(/<args>([\s\S]*)/i);
     if (fallbackMatch) {
-      raw = fallbackMatch[1].trim();
-      // Очищаємо JSON від випадково захопленого <content> блоку
-      raw = raw.replace(/<content>[\s\S]*/i, '').trim();
+      raw = fallbackMatch[1].trim().replace(/<content>[\s\S]*/i, '').trim();
     } else {
       raw = '{}';
     }
@@ -194,25 +165,16 @@ function parseToolCall(text: string): {
     } catch {
       try {
         args = JSON.parse(repairJson(raw));
-        oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
       } catch (e: any) {
-        const preview = raw.slice(0, 120).replace(/\n/g, ' ');
-        const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
-        oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
-        return { name, narration, args: {}, parseError: msg };
+        return { name, narration, args: {}, parseError: e.message };
       }
     }
   }
 
-  // 3. Додаємо витягнутий контент до аргументів для відповідних інструментів
   if (extractedContent !== null) {
-    if (name === 'write_file' || name === 'save_skill') {
-      args.content = extractedContent;
-    } else if (name === 'edit_file') {
-      args.new_content = extractedContent;
-    }
+    if (name === 'write_file' || name === 'save_skill') args.content = extractedContent;
+    else if (name === 'edit_file') args.new_content = extractedContent;
   }
-
   return { name, narration, args };
 }
 
@@ -229,19 +191,13 @@ export class AgentLoop {
 
   on(fn: (ev: AgentEvent) => void)  { this._listeners.push(fn); }
   off(fn: (ev: AgentEvent) => void) { this._listeners = this._listeners.filter(l => l !== fn); }
-  private emit(ev: AgentEvent)      {
-    if (this._listeners.length > 20) {
-      oogLogger.appendLine(`[Agent] ⚠️ Too many listeners (${this._listeners.length}). Possible memory leak.`);
-    }
-    this._listeners.forEach(l => l(ev));
-  }
+  private emit(ev: AgentEvent)      { this._listeners.forEach(l => l(ev)); }
 
   stop()         { this._abortCtrl?.abort(); this.running = false; }
   clearHistory() {
     this._history = [];
     this._loadedFolders.clear();
     this._planState = { currentPlan: [], planIdCounter: 0 };
-    oogLogger.appendLine('[Agent] Історію та план очищено.');
   }
 
   async run(
@@ -250,168 +206,60 @@ export class AgentLoop {
       workspaceContext = '',
       language = 'Ukrainian',
       workspaceRoot = '',
-      selectedSkillFolders: string[] = []
+      selectedSkillFolders: string[] = [],
   ) {
-    this.running    = true;
+    this.running = true;
     try {
       this._abortCtrl = new AbortController();
-      const signal    = this._abortCtrl.signal;
-      const config    = vscode.workspace.getConfiguration('openollamagravity');
-      const maxSteps  = config.get<number>('maxAgentSteps', 25);
-      const timeoutMs = config.get<number>('firstTokenTimeoutSec', 180) * 1000;
+      const signal = this._abortCtrl.signal;
+      const config = vscode.workspace.getConfiguration('openollamagravity');
+      const maxSteps = config.get<number>('maxAgentSteps', 50);
+      const timeoutMs = config.get<number>('firstTokenTimeoutSec', 300) * 1000;
 
-      const resolvedRoot = workspaceRoot
-          || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-          || '';
-
+      const resolvedRoot = workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
       let loadedSkills: LoadedSkill[] = [];
 
       if (this._history.length === 0) {
         const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
-
         if (selectedSkillFolders.length > 0) {
-          try {
-            const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
-            const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
-            loadedSkills = Tools.loadTopSkills(toLoad, 10);
-          } catch (e: any) {
-            oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
-          }
+          const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
+          const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
+          loadedSkills = Tools.loadTopSkills(toLoad, 20);
         }
-
-        if (loadedSkills.length > 0) {
-          this.emit({
-            type:    'skills_loaded',
-            content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-            skills:  loadedSkills.map(s => ({
-              name:        s.name,
-              folderName:  s.folderName,
-              description: s.description,
-              score:       s.score,
-            })),
-          });
-        }
-
-        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
-
-        loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
-
+        const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, resolvedRoot, resolvedRoot);
         this._history.push({ role: 'system', content: sysPrompt });
         if (contextMessages.length > 0) this._history.push(...contextMessages);
       }
-
       this._history.push({ role: 'user', content: task });
 
       for (let step = 1; step <= maxSteps; step++) {
         if (signal.aborted) break;
         this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
-
-        let output = '';
-        try {
-          output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
-        } catch (err: any) {
-          this.emit({ type: 'error', content: err.message });
-          break;
-        }
+        const output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
 
         const tool = parseToolCall(output);
-
         if (!tool) {
-          const isBrokenTags = output.includes('<tool_call>');
-          const toolNames = [
-            'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
-            'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
-            'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
-            'manage_plan', 'delegate_to_expert', 'save_skill'
-          ];
-
-          const forgottenTool = toolNames.find(tn => output.includes(tn));
-
-          if (isBrokenTags || (forgottenTool && output.length < 500)) {
-            const reason = isBrokenTags
-                ? `malformed <tool_call> structure`
-                : `missing <tool_call> tags for ${forgottenTool}`;
-
-            this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
-            this._history.push({ role: 'assistant', content: output });
-
-            const actualTool = forgottenTool || 'list_files';
-            this._history.push({
-              role: 'user',
-              content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
-                  `You tried to use a tool but didn't wrap it correctly.\n` +
-                  `FIX: You MUST use this exact XML format:\n` +
-                  `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
-                  `Please retry.`
-            });
-            continue;
-          }
-
           this.emit({ type: 'answer', content: output });
           break;
         }
 
-        if (tool.narration) {
-          this.emit({ type: 'narration', content: tool.narration });
-        }
-
+        if (tool.narration) this.emit({ type: 'narration', content: tool.narration });
         if (tool.parseError) {
-          this.emit({
-            type: 'tool_call', content: `Parse error: ${tool.name}`,
-            toolName: tool.name, toolArgs: {},
-          });
-          const errMsg =
-              `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
-              `Error: ${tool.parseError}\n\n` +
-              `REQUIRED FIX:\n` +
-              `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
-              `2. Escape all special chars in JSON strings\n` +
-              `3. Do NOT use single backslash \\ inside JSON strings\n` +
-              `4. If writing/editing files, put the text INSIDE <content>...</content> block AFTER <args>, NOT in the JSON.\n` +
-              `Retry your tool call with correct JSON.`;
+          const errMsg = `TOOL CALL FAILED — JSON error: ${tool.parseError}. Use <content> for files!`;
           this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
-          this._history.push({
-            role: 'user',
-            content:
-                `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
-                `<output>${errMsg}</output>\n</tool_result>`,
-          });
+          this._history.push({ role: 'assistant', content: output });
+          this._history.push({ role: 'user', content: `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n<output>${errMsg}</output>\n</tool_result>` });
           continue;
         }
 
-        this.emit({
-          type: 'tool_call', content: `Calling: ${tool.name}`,
-          toolName: tool.name, toolArgs: tool.args,
-        });
-
-        const res = await this._executeTool(tool.name, tool.args);
-
-        this.emit({
-          type: 'tool_result', content: res.output,
-          toolName: tool.name, ok: res.ok,
-        });
-
-        let historyOutput = res.output;
-        if (historyOutput.length > 8000) {
-          historyOutput = historyOutput.slice(0, 4000) +
-              `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
-              historyOutput.slice(-4000);
-        }
+        this.emit({ type: 'tool_call', content: `Calling: ${tool.name}`, toolName: tool.name, toolArgs: tool.args });
+        const res = await this._executeTool(tool.name, tool.args, loadedSkills);
+        this.emit({ type: 'tool_result', content: res.output, toolName: tool.name, ok: res.ok });
 
         this._history.push({ role: 'assistant', content: output });
-        this._history.push({
-          role: 'user',
-          content:
-              `<tool_result>\n` +
-              `<name>${tool.name}</name>\n` +
-              `<ok>${res.ok}</ok>\n` +
-              `<output>${historyOutput}</output>\n` +
-              `</tool_result>`,
-        });
+        this._history.push({ role: 'user', content: `<tool_result>\n<name>${tool.name}</name>\n<ok>${res.ok}</ok>\n<output>${res.output}</output>\n</tool_result>` });
         this._trimHistory();
       }
-
     } finally {
       this.running = false;
       this.emit({ type: 'done', content: '' });
@@ -419,12 +267,10 @@ export class AgentLoop {
   }
 
   private _trimHistory() {
-    // Keep system prompt + last 10 pairs (20 messages)
     if (this._history.length > 22) {
       const sys = this._history[0];
       const recent = this._history.slice(-20);
       this._history = [sys, ...recent];
-      oogLogger.appendLine(`[Agent] History trimmed to ${this._history.length} messages.`);
     }
   }
 
@@ -432,121 +278,267 @@ export class AgentLoop {
       step: number,
       total: number,
       initialMs: number,
-      signal: AbortSignal
+      signal: AbortSignal,
   ): Promise<string> {
-    const chunkTimeoutMs = 30000; // Watchdog: 30s between chunks
-
     return new Promise((resolve, reject) => {
       let started = false;
-      let watchdog: NodeJS.Timeout | undefined;
-
-      const resetWatchdog = () => {
-        if (watchdog) clearTimeout(watchdog);
-        watchdog = setTimeout(() => {
-          reject(new Error('Streaming stalled: No chunks received for 30s.'));
-        }, chunkTimeoutMs);
-      };
-
-      const initialTimer = setTimeout(() => {
-        if (!started) {
-          this._abortCtrl?.abort();
-          reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
-        }
-      }, initialMs);
-
-      this._ollama
-          .chatStream(
-              this._history,
-              chunk => {
-                if (!started) {
-                  started = true;
-                  clearTimeout(initialTimer);
-                }
-                resetWatchdog();
-                this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
-              },
-              signal,
-              this.model
-          )
-          .then(res => {
-            if (watchdog) clearTimeout(watchdog);
-            resolve(res);
-          })
-          .catch(err => {
-            if (watchdog) clearTimeout(watchdog);
-            reject(err);
-          });
+      const timer = setTimeout(() => { if (!started) reject(new Error('Ollama timeout')); }, initialMs);
+      this._ollama.chatStream(this._history, chunk => {
+        started = true;
+        clearTimeout(timer);
+        this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
+      }, signal, this.model).then(resolve).catch(reject);
     });
   }
 
-  private async _executeTool(name: string, args: any): Promise<Tools.ToolResult> {
+  private async _executeTool(
+      name: string,
+      args: any,
+      loadedSkills: LoadedSkill[] = [],
+  ): Promise<Tools.ToolResult> {
     const confirm = async (msg: string) =>
         (await vscode.window.showWarningMessage(`OOG: ${msg}`, 'Allow', 'Deny')) === 'Allow';
 
     switch (name) {
-      case 'read_file':        return Tools.readFile(args);
-      case 'write_file':       return Tools.writeFile(args, p => confirm(`Записати у ${p}`));
-      case 'edit_file':        return Tools.editFile(args, (p, d) => confirm(`Редагувати ${p}:\n${d}`));
-      case 'list_files':       return Tools.listFiles(args);
-      case 'search_files':     return Tools.searchFiles(args);
-      case 'run_terminal':     return Tools.runTerminal(args, c => confirm(`Запустити: ${c}`));
-      case 'get_diagnostics':  return Tools.getDiagnostics(args);
-      case 'get_file_outline': return Tools.getFileOutline(args);
-      case 'create_directory': return Tools.createDirectory(args);
-      case 'delete_file':      return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`));
+      case 'read_file':          return Tools.readFile(args);
+      case 'write_file':         return Tools.writeFile(args, p => confirm(`Записати у ${p}`));
+      case 'edit_file':          return Tools.editFile(args, (p, _d) => confirm(`Редагувати ${p}`));
+      case 'list_files':         return Tools.listFiles(args);
+      case 'search_files':       return Tools.searchFiles(args);
+      case 'run_terminal':       return Tools.runTerminal(args, c => confirm(`Запустити: ${c}`));
+      case 'get_diagnostics':    return Tools.getDiagnostics(args);
+      case 'get_file_outline':   return Tools.getFileOutline(args);
       case 'get_workspace_info': return Tools.getWorkspaceInfo(args);
-      case 'list_skills':      return Tools.listSkills();
-      case 'read_skill':       return Tools.readSkill(args);
-      case 'web_search':       return Tools.webSearch(args);
+      case 'manage_plan':        return Tools.managePlan(args, this._planState);
 
-      case 'manage_plan': {
-        return Tools.managePlan(args, this._planState);
-      }
+        // ─────────────────────────────────────────────────────────────
+      case 'run_chatdev_team': {
+        if (!args.task || !args.output_dir) {
+          return { ok: false, output: 'Missing task or output_dir' };
+        }
+        if (!await confirm(`Запустити ChatDev у "${args.output_dir}"?`)) {
+          return { ok: false, output: 'Cancelled' };
+        }
 
-      case 'save_skill': {
-        return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
-      }
+        // Skills block shared by all sub-agents
+        const skillsBlock = loadedSkills.length > 0
+            ? `\n\n### PROJECT SKILLS:\n` + loadedSkills.map(s => `#### ${s.name}\n${s.content}`).join('\n')
+            : '';
 
-      case 'delegate_to_expert': {
-        if (!args.role || !args.question) return { ok: false, output: 'Missing role or question' };
+        // Shared memory accumulates context so every agent sees previous files
+        let sharedMemory = `### BUILT CONTEXT:\n`;
+        let report       = `🏢 ChatDev Report:\n`;
 
-        this.emit({ type: 'narration', content: `👥 Swarm: Звертаюсь до субагента [${args.role}]...` });
+        const { signal } = this._abortCtrl!;
 
-        const subPrompt = `You are an expert AI sub-agent with the role: ${args.role}. 
-Your goal is to answer the following request from the Main Agent.
-CONTEXT: ${args.context || 'None provided'}
-QUESTION: ${args.question}`;
+        // ── PHASE 1: CTO ──────────────────────────────────────────
+        this.emit({ type: 'narration', content: `🧠 CTO: Проектую архітектуру...` });
 
-        const subAbort = new AbortController();
-        const subTimer = setTimeout(() => subAbort.abort(), 60_000);
+        const ctoPrompt =
+            `You are the CTO of a software company. Your task: "${args.task}".` +
+            skillsBlock +
+            `\n\nOutput ONLY a single valid JSON object — no prose, no markdown fences:\n` +
+            `{"dependencies": "npm install ...", "files": [{"filename": "...", "description": "..."}]}`;
 
         try {
-          const answer = await this._ollama.chatStream(
-              [{ role: 'user', content: subPrompt }],
-              chunk => {
-                // Пряме прокидання "думання" субагента в основний потік не робимо,
-                // щоб не плутати користувача, але можна додати логування.
-              },
-              subAbort.signal
-          );
-          clearTimeout(subTimer);
-          return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
+          let ctoRes = await this._ollama.generate(ctoPrompt, 2048, this.model);
+
+          // Markdown cleaning
+          ctoRes = ctoRes
+              .replace(/^```json\s*/i, '')
+              .replace(/^```\s*/i,     '')
+              .replace(/\s*```$/g,     '')
+              .trim();
+
+          // Robust JSON parsing: extract first {...} block even if the model
+          // wrapped it in explanatory text
+          const ctoJsonMatch = ctoRes.match(/\{[\s\S]*\}/);
+          if (!ctoJsonMatch) throw new Error('CTO did not return valid JSON');
+          const ctoJson = JSON.parse(repairJson(ctoJsonMatch[0]));
+
+          const deps: string = ctoJson.dependencies || '';
+          const files: Array<{ filename: string; description: string }> = ctoJson.files || [];
+
+          report += `\n📐 Architecture: ${files.length} files planned\n`;
+          sharedMemory += `CTO designed ${files.length} files: ${files.map(f => f.filename).join(', ')}\n`;
+          this.emit({ type: 'narration', content: `📐 CTO спроектував: ${files.map(f => f.filename).join(', ')}` });
+
+          // ── PHASE 2: Install dependencies ───────────────────────
+          if (deps) {
+            this.emit({ type: 'narration', content: `📦 Встановлення залежностей...` });
+            const installRes = await Tools.runTerminal(
+                { command: deps, cwd: args.output_dir },
+                async () => true,
+            );
+            report += `\n📦 Install: ${installRes.ok ? 'OK' : installRes.output.slice(0, 100)}\n`;
+          }
+
+          // ── PHASE 3: Create output directory ────────────────────
+          await Tools.createDirectory({ path: args.output_dir });
+
+          // ── PHASE 4 + 5: Programmer → Reviewer (per file) ───────
+          for (const file of files) {
+            if (signal.aborted) break;
+
+            // — Programmer —
+            this.emit({ type: 'narration', content: `👨‍💻 Programmer: пишу ${file.filename}...` });
+
+            const programmerPrompt =
+                `You are an expert Programmer in a software company.\n` +
+                skillsBlock +
+                `\n\n### TASK:\n${args.task}` +
+                `\n\n### ARCHITECTURE (from CTO):` +
+                `\nFile to implement: "${file.filename}"` +
+                `\nDescription: "${file.description}"` +
+                `\n\n### SHARED MEMORY (already built):\n${sharedMemory}` +
+                `\n\n### INSTRUCTIONS:` +
+                `\n- Write COMPLETE, production-ready code for "${file.filename}".` +
+                `\n- Output ONLY the raw file content. No markdown fences, no explanations.` +
+                `\n- Follow all skills and best practices listed above strictly.`;
+
+            let code = await this._ollama.generate(programmerPrompt, 4096, this.model);
+            // Markdown cleaning
+            code = code.replace(/^```[\w]*\n?/gm, '').replace(/```\s*$/gm, '').trim();
+
+            // — Reviewer —
+            this.emit({ type: 'narration', content: `🔍 Reviewer: перевіряю ${file.filename}...` });
+
+            const reviewerPrompt =
+                `You are a senior Code Reviewer in a software company.\n` +
+                skillsBlock +
+                `\n\n### TASK:\n${args.task}` +
+                `\n\n### FILE TO REVIEW: ${file.filename}\n\`\`\`\n${code}\n\`\`\`` +
+                `\n\n### SHARED MEMORY:\n${sharedMemory}` +
+                `\n\n### INSTRUCTIONS:` +
+                `\n- Line 1 MUST be exactly APPROVED or FIXED (all caps).` +
+                `\n- If code is correct, write APPROVED on line 1, then the full code from line 2.` +
+                `\n- If there are bugs, fix them, write FIXED on line 1, then the corrected code from line 2.` +
+                `\n- No markdown fences, no extra commentary.`;
+
+            let reviewRes = await this._ollama.generate(reviewerPrompt, 4096, this.model);
+            // Markdown cleaning
+            reviewRes = reviewRes.replace(/^```[\w]*\n?/gm, '').replace(/```\s*$/gm, '').trim();
+
+            const lines   = reviewRes.split('\n');
+            const verdict = lines[0].trim().toUpperCase();
+            let finalCode = (verdict === 'APPROVED' || verdict === 'FIXED')
+                ? lines.slice(1).join('\n').trim()
+                : reviewRes; // fallback: model ignored the protocol
+
+            // Final markdown cleaning
+            finalCode = finalCode.replace(/^```[\w]*\n?/gm, '').replace(/```\s*$/gm, '').trim();
+
+            // Write file
+            const filePath = path.join(args.output_dir, file.filename);
+            const writeRes = await Tools.writeFile({ path: filePath, content: finalCode }, async () => true);
+
+            const icon = verdict === 'FIXED' ? '🔧' : '✅';
+            report += `\n${icon} ${file.filename}: ${writeRes.ok ? (verdict || 'OK') : 'WRITE ERROR'}`;
+            this.emit({
+              type:     'tool_result',
+              content:  `Записано: ${file.filename} [${verdict}]`,
+              toolName: 'write_file',
+              ok:       writeRes.ok,
+            });
+
+            // Append to shared memory (truncated to keep prompts manageable)
+            const snippet = finalCode.length > 1200
+                ? finalCode.slice(0, 1200) + '\n... (truncated)'
+                : finalCode;
+            sharedMemory += `\n\n### FILE: ${file.filename}\n\`\`\`\n${snippet}\n\`\`\``;
+          }
+
+          // ── PHASE 6: TechWriter — README ────────────────────────
+          if (!signal.aborted) {
+            this.emit({ type: 'narration', content: `📝 TechWriter: генерую README...` });
+
+            const twPrompt =
+                `You are a Technical Writer in a software company.\n` +
+                skillsBlock +
+                `\n\n### TASK:\n${args.task}` +
+                `\n\n### PROJECT FILES BUILT:\n` +
+                files.map(f => `- ${f.filename}: ${f.description}`).join('\n') +
+                `\n\n### SHARED MEMORY:\n${sharedMemory}` +
+                `\n\nWrite a clear, professional README.md for this project.` +
+                `\nInclude: project title, description, installation, usage, file structure.` +
+                `\nOutput ONLY raw Markdown. No extra commentary.`;
+
+            let readme = await this._ollama.generate(twPrompt, 2048, this.model);
+            readme = readme.replace(/^```[\w]*\n?/gm, '').replace(/```\s*$/gm, '').trim();
+
+            const readmePath = path.join(args.output_dir, 'README.md');
+            await Tools.writeFile({ path: readmePath, content: readme }, async () => true);
+            report += `\n📄 README.md: OK`;
+          }
+
+          report += `\n\n✅ ChatDev завершив роботу у: ${args.output_dir}`;
+          return { ok: true, output: report };
+
         } catch (e: any) {
-          clearTimeout(subTimer);
-          return { ok: false, output: `Expert failed: ${e.message}` };
+          oogLogger.appendLine(`[ChatDev error] ${e?.message ?? e}`);
+          return { ok: false, output: `ChatDev failed: ${e.message}` };
         }
       }
 
-      default: {
-        return {
-          ok: false,
-          output:
-              `CRITICAL ERROR: Unknown tool "${name}". ` +
-              `Valid tools: read_file, write_file, edit_file, list_files, search_files, run_terminal, ` +
-              `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill. ` +
-              `Fix your <tool_call> and use an exact tool name from the list.`,
-        };
+        // ─────────────────────────────────────────────────────────────
+      case 'delegate_to_expert': {
+        if (!args.role || !args.question) {
+          return { ok: false, output: 'Missing role or question' };
+        }
+
+        // Skills are forwarded to delegated experts as well
+        const expertSkillsBlock = loadedSkills.length > 0
+            ? `\n\n### PROJECT SKILLS:\n` + loadedSkills.map(s => `#### ${s.name}\n${s.content}`).join('\n')
+            : '';
+
+        const expertPrompt =
+            `You are ${args.role}. Answer the following question thoroughly and precisely.` +
+            expertSkillsBlock +
+            (args.context ? `\n\n### CONTEXT:\n${args.context}` : '') +
+            `\n\n### QUESTION:\n${args.question}` +
+            `\n\nProvide a complete, actionable answer. Base your response strictly on facts.`;
+
+        try {
+          this.emit({ type: 'narration', content: `🤝 Делегую до: ${args.role}` });
+          const expertAnswer = await this._ollama.generate(expertPrompt, 3000, this.model);
+          return { ok: true, output: expertAnswer.trim() };
+        } catch (e: any) {
+          return { ok: false, output: `Expert delegation failed: ${e.message}` };
+        }
       }
+
+        // ─────────────────────────────────────────────────────────────
+      case 'save_skill': {
+        if (!args.name || !args.content) return { ok: false, output: 'Missing name or content' };
+        return Tools.saveSkill(args.name, args.content);
+      }
+
+      case 'list_skills': {
+        return Tools.listSkills();
+      }
+
+      case 'read_skill': {
+        if (!args.name) return { ok: false, output: 'Missing skill name' };
+        return Tools.readSkill(args);
+      }
+
+      case 'web_search': {
+        if (!args.query) return { ok: false, output: 'Missing query' };
+        return Tools.webSearch(args);
+      }
+
+      case 'create_directory': {
+        return Tools.createDirectory(args);
+      }
+
+      case 'delete_file': {
+        const confirmed = await confirm(`Видалити файл: ${args.path}?`);
+        if (!confirmed) return { ok: false, output: 'Cancelled by user' };
+        return Tools.deleteFile(args, async () => true);
+      }
+
+      default:
+        return { ok: false, output: `Unknown tool: "${name}". Check the tool list in the system prompt.` };
     }
   }
 }

@@ -49,25 +49,35 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 
 ### CRITICAL CONSTRAINTS (READ CAREFULLY):
 1. XML Format ONLY: You MUST wrap every tool call inside <tool_call> tags. NEVER write tool calls as plain text or javascript functions.
-2. Example of a CORRECT tool call:
+2. Example of a CORRECT tool call for reading/listing:
 <tool_call>
 <name>list_files</name>
 <args>{"path": ".", "depth": 1}</args>
 </tool_call>
 
+Example of a CORRECT tool call for writing/editing (use <content>):
+<tool_call>
+<name>write_file</name>
+<args>{"path": "docs/README.md"}</args>
+<content>
+# Documentation
+Put your multi-line content here without escaping quotes or newlines.
+</content>
+</tool_call>
+
 3. Language & Translation: The user may provide tasks in various languages. You MUST internally translate the user's request into English to plan your actions and use tools accurately. However, you MUST ALWAYS provide your final explanations, narrations, and direct answers to the user in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
 5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
-6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess or invent file contents or project architecture.
-7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files BEFORE generating a response.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
+7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description, content): Save a new skill (reusable pattern, best practice, or technical lesson) for future tasks. CRITICAL: NEVER use this for project-specific docs, logs, or analysis.
+- save_skill(name, description): Save a new skill. CRITICAL: Put the actual skill text INSIDE a <content>...</content> block AFTER <args>. Do NOT put it in JSON.
 - read_file(path, start_line?, end_line?): Read file content.
-- write_file(path, content): Create/Overwrite file. Use this for project documentation, configs, and code.
-- edit_file(path, start_line, end_line, new_content): Replace lines.
+- write_file(path): Create/Overwrite file. CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
+- edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.
 - run_terminal(command, cwd?): Run shell commands. CRITICAL: NEVER run blocking server commands (like "npm start" or "dev"). Only run tasks that finish and exit.
@@ -145,39 +155,55 @@ function parseToolCall(text) {
     if (!nameMatch)
         return null;
     const name = nameMatch[1].trim();
+    // 1. Витягуємо вміст з <content>...</content>, якщо він є
+    const contentMatch = inner.match(/<content>([\s\S]*?)<\/content>/i) || inner.match(/<content>([\s\S]*)/i);
+    const extractedContent = contentMatch ? contentMatch[1].trim() : null;
+    // 2. Витягуємо JSON з <args>
     let raw = '';
     const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
     if (argsMatch) {
         raw = argsMatch[1].trim();
     }
     else {
-        // Якщо модель відкрила <args>, але забула закрити </args>
         const fallbackMatch = inner.match(/<args>([\s\S]*)/i);
         if (fallbackMatch) {
             raw = fallbackMatch[1].trim();
+            // Очищаємо JSON від випадково захопленого <content> блоку
+            raw = raw.replace(/<content>[\s\S]*/i, '').trim();
         }
         else {
-            return { name, narration, args: {} };
+            raw = '{}';
         }
     }
-    if (!raw || raw === '{}')
-        return { name, narration, args: {} };
-    raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-    try {
-        return { name, narration, args: JSON.parse(raw) };
+    let args = {};
+    if (raw && raw !== '{}') {
+        raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+        try {
+            args = JSON.parse(raw);
+        }
+        catch {
+            try {
+                args = JSON.parse(repairJson(raw));
+                client_1.oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
+            }
+            catch (e) {
+                const preview = raw.slice(0, 120).replace(/\n/g, ' ');
+                const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
+                client_1.oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
+                return { name, narration, args: {}, parseError: msg };
+            }
+        }
     }
-    catch { /* next */ }
-    try {
-        const args = JSON.parse(repairJson(raw));
-        client_1.oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
-        return { name, narration, args };
+    // 3. Додаємо витягнутий контент до аргументів для відповідних інструментів
+    if (extractedContent !== null) {
+        if (name === 'write_file' || name === 'save_skill') {
+            args.content = extractedContent;
+        }
+        else if (name === 'edit_file') {
+            args.new_content = extractedContent;
+        }
     }
-    catch (e) {
-        const preview = raw.slice(0, 120).replace(/\n/g, ' ');
-        const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
-        client_1.oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
-        return { name, narration, args: {}, parseError: msg };
-    }
+    return { name, narration, args };
 }
 class AgentLoop {
     constructor(_ollama) {
@@ -303,6 +329,7 @@ class AgentLoop {
                         `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
                         `2. Escape all special chars in JSON strings\n` +
                         `3. Do NOT use single backslash \\ inside JSON strings\n` +
+                        `4. If writing/editing files, put the text INSIDE <content>...</content> block AFTER <args>, NOT in the JSON.\n` +
                         `Retry your tool call with correct JSON.`;
                     this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
                     this._history.push({

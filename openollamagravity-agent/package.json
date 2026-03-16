@@ -2,7 +2,7 @@
   "name": "openollamagravity-agent",
   "displayName": "OpenOllamaGravity Agent",
   "description": "Автономний AI-агент для програмування на базі Ollama",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "publisher": "yuriikucherenko",
   "author": "Юрій Кучеренко",
   "repository": {
@@ -10,7 +10,6 @@
     "url": "https://github.com/yuriikucherenko/openollamagravity-agent.git"
   },
   "license": "MIT",
-
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -116,6 +115,43 @@
           "type": "string",
           "default": "gemma3n:latest",
           "description": "Модель за замовчуванням (gemma3n:latest)."
+        },
+        "openollamagravity.modelTiers": {
+          "type": "object",
+          "default": {
+            "deepseek-r1": 100,
+            "deepseek-v3.2": 100,
+            "qwen3": 100,
+            "glm-5": 100,
+            "llama3.3": 95,
+            "qwen2.5-coder": 95,
+            "devstral": 90,
+            "phi4": 90,
+            "codestral": 90,
+            "yi-coder": 90,
+            "gpt-oss": 90,
+            "minimax-m2.5": 85,
+            "gemma3": 85,
+            "llama3.2": 85,
+            "llama3.1": 80,
+            "qwen2.5": 80,
+            "deepseek-coder-v2": 80,
+            "mistral-large": 80,
+            "starcoder2": 70,
+            "mixtral": 70,
+            "deepseek-coder": 70,
+            "codellama": 60,
+            "llama3": 50,
+            "phi3": -20,
+            "llama2": -50,
+            "llama3.2:1b": -50,
+            "gemma:2b": -50,
+            "gemma2:2b": -50,
+            "qwen:0.5b": -50,
+            "qwen2.5:0.5b": -50,
+            "qwen2.5:1.5b": -50
+          },
+          "description": "Рейтинг пріоритетів для сімейств моделей Ollama станом на 2026 рік. Використовується для автоматичного вибору найоптимальнішої моделі для автономних агентів. Додатні значення підвищують пріоритет (особливо для reasoning та coder моделей), від'ємні — жорстко штрафують мікро-моделі та застарілі архітектури, які ламають структуру JSON/XML."
         },
         "openollamagravity.temperature": {
           "type": "number",
