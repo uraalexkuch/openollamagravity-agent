@@ -62,14 +62,21 @@ Example of a CORRECT tool call for writing/editing (use <content>):
 <content>
 # Documentation
 Put your multi-line content here without escaping quotes or newlines.
-</content>
-</tool_call>
-
-3. STRICT Language Requirement: You MUST ALWAYS provide your "Thinking", explanations, tool narrations, and final answers in the language explicitly specified: ${language}. Under NO circumstances should you use English or any other language for these sections, even if the task is provided in English. Internally, you may use English to optimize your planning and tool parameters, but every part of your output visible to the user MUST be in ${language}.
+3. Language & Narrations: You MUST conduct all planning, reasoning, and thinking inside <thought> tags. While you should aim for ${language} in your final answers and narrations, your internal reasoning inside <thought> blocks can be in English if it helps you compute the task more accurately. However, every part of your output that is NOT inside a tag MUST be in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
-5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
-6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
-7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
+5. Workflow: THINK -> CALL TOOL -> GET RESULT -> NARRATE -> CONTINUE until done.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on facts from tools. DO NOT guess or assume file contents.
+7. FACT-BASED ANALYSIS: BEFORE generating a response about the project, you MUST use tools to read actual files (package.json, src/, etc.).
+8. NARRATION & THOUGHTS:
+   Example of a CORRECT response with thinking:
+   <thought>
+   I need to create documentation. I'll check the current project structure first.
+   </thought>
+   Я перевірю структуру проекту перед початком...
+   <tool_call>
+   <name>list_files</name>
+   <args>{"path": "."}</args>
+   </tool_call>
 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "delete", "view", "clear". CRITICAL: Always create a plan before complex coding!
@@ -148,7 +155,16 @@ function parseToolCall(text) {
     if (!block)
         return null;
     const blockStart = text.indexOf('<tool_call>');
-    const narration = text.slice(0, blockStart).trim();
+    let narration = text.slice(0, blockStart === -1 ? undefined : blockStart).trim();
+    let thought = '';
+    const thoughtBlock = narration.match(/<thought>([\s\S]*?)<\/thought>/i);
+    if (thoughtBlock) {
+        thought = thoughtBlock[1].trim();
+        narration = narration.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+    }
+    if (blockStart === -1) {
+        return narration || thought ? { name: '', args: {}, narration, thought } : null;
+    }
     const inner = block[1];
     const nameMatch = inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
         inner.match(/<name>\s*([\w_]+)\s*<\/name>/i); // true fallback
@@ -315,6 +331,9 @@ class AgentLoop {
                     this._history.push({ role: 'assistant', content: output });
                     this.emit({ type: 'answer', content: output });
                     break;
+                }
+                if (tool.thought) {
+                    this.emit({ type: 'thinking', content: tool.thought });
                 }
                 if (tool.narration) {
                     this.emit({ type: 'narration', content: tool.narration });

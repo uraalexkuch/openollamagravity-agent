@@ -60,11 +60,11 @@ Example of a CORRECT tool call for writing/editing (use <content>):
 <content>
 # Documentation
 Put your multi-line content here without escaping quotes or newlines.
-3. Language & Narrations: You MUST conduct all planning, reasoning, and thinking inside <thought> tags. While you should aim for ${language} in your final answers and narrations, your internal reasoning inside <thought> blocks can be in English if it helps you compute the task more accurately. However, every part of your output that is NOT inside a tag MUST be in ${language}.
+3. Language & Translation: The user may provide tasks in various languages. You MUST internally translate the user's request into English to plan your actions and use tools accurately. You MUST conduct all planning, reasoning, and thinking inside <thought> tags (preferably in English). However, you MUST ALWAYS provide your final explanations, narrations, and direct answers to the user in ${language}. Every part of your output that is NOT inside a tag MUST be in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
-5. Workflow: THINK -> CALL TOOL -> GET RESULT -> NARRATE -> CONTINUE until done.
-6. NO HALLUCINATIONS: Base your answers STRICTLY on facts from tools. DO NOT guess or assume file contents.
-7. FACT-BASED ANALYSIS: BEFORE generating a response about the project, you MUST use tools to read actual files (package.json, src/, etc.).
+5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> NARRATE -> CONTINUE until done.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools (e.g., read_file, list_files, get_workspace_info). DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
+7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
 8. NARRATION & THOUGHTS:
    Example of a CORRECT response with thinking:
    <thought>
@@ -79,7 +79,7 @@ Put your multi-line content here without escaping quotes or newlines.
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "delete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description): Save a pattern/best-practice/guide to the global knowledge base for FUTURE TASKS. NOT for current project files.
+- save_skill(name, description): Save a pattern/best-practice/guide for FUTURE TASKS. CRITICAL: NEVER use this for project-specific docs. Put the skill text INSIDE a <content> block.
 - read_file(path, start_line?, end_line?): Read file content.
 - write_file(path): Create/Overwrite project files (code, README, docs/...). CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
 - edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
@@ -97,20 +97,27 @@ ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 
 function repairJson(raw: string): string {
-  // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
-  let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
+  // 1. Ensure it's wrapped in braces if it looks like a key-value list but isn't wrapped
+  let result = raw.trim();
+  if (result && !result.startsWith('{') && result.includes(':')) {
+    result = '{' + result + '}';
+  }
 
-  // 2. Змінюємо одинарні лапки на подвійні для значень
+  // 2. Fix unquoted keys or keys with single quotes
+  result = result.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
+
+  // 3. Fix values with single quotes
   result = result.replace(/:\s*'([^']*)'/g, (_, inner) => ': "' + inner.replace(/"/g, '\\"') + '"');
   result = result.replace(/,\s*'([^']*)'/g, (_, inner) => ', "' + inner.replace(/"/g, '\\"') + '"');
 
-  // 3. Виправляємо одинарні бекслеші у шляхах Windows та перенесення рядків
+  // 4. Handle Windows paths and control characters inside strings
   let finalResult = '';
   let inString = false;
   let i = 0;
 
   while (i < result.length) {
     const ch = result[i];
+
     if (!inString) {
       if (ch === '"') { inString = true; }
       finalResult += ch;
@@ -137,14 +144,20 @@ function repairJson(raw: string): string {
       const next = result[i + 1] ?? '';
       if (/["\\\/bfnrtu]/.test(next)) {
         finalResult += ch + next;
+        i += 2;
+      } else if (next === 'u') {
+        finalResult += ch + result.slice(i + 1, i + 6);
+        i += 6;
       } else {
-        finalResult += '\\\\' + next;
+        finalResult += '\\\\';
+        i++;
       }
-      i += 2;
       continue;
     }
 
-    if (ch === '"') { inString = false; }
+    if (ch === '"') {
+      inString = false;
+    }
     finalResult += ch;
     i++;
   }
