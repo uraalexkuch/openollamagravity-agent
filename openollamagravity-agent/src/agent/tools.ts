@@ -574,6 +574,7 @@ function getPerplexicaUrl(): string {
 /** 🌐 WEB SEARCH через Perplexica */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
+  // Очищення запиту від спецсимволів
   query = query.replace(/[@#$]/g, ' ');
 
   let website = args?.website || args?.domain;
@@ -586,27 +587,15 @@ export async function webSearch(args: any): Promise<ToolResult> {
   const perplexicaUrl = getPerplexicaUrl();
   oogLogger.appendLine(`[WebSearch] "${query}"`);
 
-  const activeModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model', 'llama3.1');
-
   return new Promise((promiseResolve) => {
     try {
       const url      = new URL('/api/search', perplexicaUrl);
       const lib      = url.protocol === 'https:' ? https : http;
 
+      // ВИКОРИСТОВУЄМО МІНІМАЛЬНИЙ ПЕЙЛОАД
       const bodyData = JSON.stringify({
-        query,
-        focusMode: args.focusMode || 'webSearch',
-        sources: ['web'],
-        optimizationMode: 'speed',
-        history: [],
-        chatModel: {
-          provider: 'ollama',
-          model: activeModel
-        },
-        embeddingModel: {
-          provider: 'ollama',
-          model: 'nomic-embed-text-v2-moe:latest' // <--- ЗМІНЕНО НА ВАШУ МОДЕЛЬ
-        }
+        query: query,
+        focusMode: args.focusMode || 'webSearch'
       });
 
       const req = lib.request(url, {
@@ -623,7 +612,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
             oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
             promiseResolve({
               ok: false,
-              output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'nomic-embed-text-v2-moe:latest' is pulled and SearxNG is running.`
+              output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}`
             });
             return;
           }
@@ -635,6 +624,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
             }
             let output = `Search Results for "${query}":\n\n`;
             output += `Summary: ${data.message || data.text || 'No summary available'}\n\n`;
+
             if (data.sources && data.sources.length > 0) {
               output += 'Sources:\n';
               data.sources.slice(0, 5).forEach((s: any, i: number) => {
@@ -655,6 +645,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
         oogLogger.appendLine(`[WebSearch] Error: ${err.message}`);
         promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}. URL: ${perplexicaUrl}` });
       });
+
       req.write(bodyData);
       req.end();
     } catch (err: any) {

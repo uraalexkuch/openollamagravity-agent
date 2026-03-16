@@ -578,7 +578,7 @@ async function webSearch(args) {
                 },
                 embeddingModel: {
                     provider: 'ollama',
-                    model: 'bge-m3:latest'
+                    model: 'nomic-embed-text-v2-moe:latest' // <--- ЗМІНЕНО НА ВАШУ МОДЕЛЬ
                 }
             });
             const req = lib.request(url, {
@@ -595,7 +595,7 @@ async function webSearch(args) {
                         client_1.oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
                         promiseResolve({
                             ok: false,
-                            output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'bge-m3:latest' is pulled and SearxNG is running.`
+                            output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'nomic-embed-text-v2-moe:latest' is pulled and SearxNG is running.`
                         });
                         return;
                     }
