@@ -27,6 +27,7 @@ export interface AgentEvent {
   skills?:     Array<{ name: string; folderName: string; description: string; score: number }>;
   signals?:    string[];
 }
+
 function buildSystemPrompt(
     language:         string,
     skills:           LoadedSkill[],
@@ -46,25 +47,35 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 
 ### CRITICAL CONSTRAINTS (READ CAREFULLY):
 1. XML Format ONLY: You MUST wrap every tool call inside <tool_call> tags. NEVER write tool calls as plain text or javascript functions.
-2. Example of a CORRECT tool call:
+2. Example of a CORRECT tool call for reading/listing:
 <tool_call>
 <name>list_files</name>
 <args>{"path": ".", "depth": 1}</args>
 </tool_call>
 
+Example of a CORRECT tool call for writing/editing (use <content>):
+<tool_call>
+<name>write_file</name>
+<args>{"path": "docs/README.md"}</args>
+<content>
+# Documentation
+Put your multi-line content here without escaping quotes or newlines.
+</content>
+</tool_call>
+
 3. Language & Translation: The user may provide tasks in various languages. You MUST internally translate the user's request into English to plan your actions and use tools accurately. However, you MUST ALWAYS provide your final explanations, narrations, and direct answers to the user in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
 5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
-6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess or invent file contents or project architecture.
-7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files BEFORE generating a response.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
+7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description, content): Save a new skill (reusable pattern, best practice, or technical lesson) for future tasks. CRITICAL: NEVER use this for project-specific docs, logs, or analysis.
+- save_skill(name, description): Save a new skill. CRITICAL: Put the actual skill text INSIDE a <content>...</content> block AFTER <args>. Do NOT put it in JSON.
 - read_file(path, start_line?, end_line?): Read file content.
-- write_file(path, content): Create/Overwrite file. Use this for project documentation, configs, and code.
-- edit_file(path, start_line, end_line, new_content): Replace lines.
+- write_file(path): Create/Overwrite file. CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
+- edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.
 - run_terminal(command, cwd?): Run shell commands. CRITICAL: NEVER run blocking server commands (like "npm start" or "dev"). Only run tasks that finish and exit.
@@ -77,6 +88,7 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 - list_skills(), read_skill(name): View best practices.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
+
 function repairJson(raw: string): string {
   // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
   let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
@@ -153,37 +165,55 @@ function parseToolCall(text: string): {
   if (!nameMatch) return null;
   const name = nameMatch[1].trim();
 
+  // 1. Витягуємо вміст з <content>...</content>, якщо він є
+  const contentMatch = inner.match(/<content>([\s\S]*?)<\/content>/i) || inner.match(/<content>([\s\S]*)/i);
+  const extractedContent = contentMatch ? contentMatch[1].trim() : null;
+
+  // 2. Витягуємо JSON з <args>
   let raw = '';
   const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
 
   if (argsMatch) {
     raw = argsMatch[1].trim();
   } else {
-    // Якщо модель відкрила <args>, але забула закрити </args>
     const fallbackMatch = inner.match(/<args>([\s\S]*)/i);
     if (fallbackMatch) {
       raw = fallbackMatch[1].trim();
+      // Очищаємо JSON від випадково захопленого <content> блоку
+      raw = raw.replace(/<content>[\s\S]*/i, '').trim();
     } else {
-      return { name, narration, args: {} };
+      raw = '{}';
     }
   }
 
-  if (!raw || raw === '{}') return { name, narration, args: {} };
-
-  raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-
-  try { return { name, narration, args: JSON.parse(raw) }; } catch { /* next */ }
-
-  try {
-    const args = JSON.parse(repairJson(raw));
-    oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
-    return { name, narration, args };
-  } catch (e: any) {
-    const preview = raw.slice(0, 120).replace(/\n/g, ' ');
-    const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
-    oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
-    return { name, narration, args: {}, parseError: msg };
+  let args: any = {};
+  if (raw && raw !== '{}') {
+    raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+    try {
+      args = JSON.parse(raw);
+    } catch {
+      try {
+        args = JSON.parse(repairJson(raw));
+        oogLogger.appendLine(`[Agent] JSON auto-repaired for "${name}"`);
+      } catch (e: any) {
+        const preview = raw.slice(0, 120).replace(/\n/g, ' ');
+        const msg = `JSON parse error: ${e.message} | raw: ${preview}`;
+        oogLogger.appendLine(`[Agent] ⚠️  ${msg}`);
+        return { name, narration, args: {}, parseError: msg };
+      }
+    }
   }
+
+  // 3. Додаємо витягнутий контент до аргументів для відповідних інструментів
+  if (extractedContent !== null) {
+    if (name === 'write_file' || name === 'save_skill') {
+      args.content = extractedContent;
+    } else if (name === 'edit_file') {
+      args.new_content = extractedContent;
+    }
+  }
+
+  return { name, narration, args };
 }
 
 export class AgentLoop {
@@ -225,161 +255,162 @@ export class AgentLoop {
     this.running    = true;
     try {
       this._abortCtrl = new AbortController();
-    const signal    = this._abortCtrl.signal;
-    const config    = vscode.workspace.getConfiguration('openollamagravity');
-    const maxSteps  = config.get<number>('maxAgentSteps', 25);
-    const timeoutMs = config.get<number>('firstTokenTimeoutSec', 180) * 1000;
+      const signal    = this._abortCtrl.signal;
+      const config    = vscode.workspace.getConfiguration('openollamagravity');
+      const maxSteps  = config.get<number>('maxAgentSteps', 25);
+      const timeoutMs = config.get<number>('firstTokenTimeoutSec', 180) * 1000;
 
-    const resolvedRoot = workspaceRoot
-        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-        || '';
+      const resolvedRoot = workspaceRoot
+          || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+          || '';
 
-    let loadedSkills: LoadedSkill[] = [];
+      let loadedSkills: LoadedSkill[] = [];
 
-    if (this._history.length === 0) {
-      const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
+      if (this._history.length === 0) {
+        const taskContext = [task, workspaceContext, resolvedRoot].filter(Boolean).join('\n');
 
-      if (selectedSkillFolders.length > 0) {
-        try {
-          const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
-          const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
-          loadedSkills = Tools.loadTopSkills(toLoad, 10);
-        } catch (e: any) {
-          oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
+        if (selectedSkillFolders.length > 0) {
+          try {
+            const allScored = Tools.scanAndScoreAllSkillsIdf(taskContext, new Set(), 0);
+            const toLoad = allScored.filter(s => selectedSkillFolders.includes(s.folderName));
+            loadedSkills = Tools.loadTopSkills(toLoad, 10);
+          } catch (e: any) {
+            oogLogger.appendLine(`[Agent] Manual skills load error: ${e.message}`);
+          }
         }
+
+        if (loadedSkills.length > 0) {
+          this.emit({
+            type:    'skills_loaded',
+            content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
+            skills:  loadedSkills.map(s => ({
+              name:        s.name,
+              folderName:  s.folderName,
+              description: s.description,
+              score:       s.score,
+            })),
+          });
+        }
+
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
+
+        loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
+
+        this._history.push({ role: 'system', content: sysPrompt });
+        if (contextMessages.length > 0) this._history.push(...contextMessages);
       }
 
-      if (loadedSkills.length > 0) {
-        this.emit({
-          type:    'skills_loaded',
-          content: `Підібрано ${loadedSkills.length} скіл(и) для задачі`,
-          skills:  loadedSkills.map(s => ({
-            name:        s.name,
-            folderName:  s.folderName,
-            description: s.description,
-            score:       s.score,
-          })),
-        });
-      }
+      this._history.push({ role: 'user', content: task });
 
-      const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      const sysPrompt = buildSystemPrompt(language, loadedSkills, workspaceContext, workspacePath, resolvedRoot);
+      for (let step = 1; step <= maxSteps; step++) {
+        if (signal.aborted) break;
+        this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
 
-      loadedSkills.forEach(s => this._loadedFolders.add(s.folderName));
+        let output = '';
+        try {
+          output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
+        } catch (err: any) {
+          this.emit({ type: 'error', content: err.message });
+          break;
+        }
 
-      this._history.push({ role: 'system', content: sysPrompt });
-      if (contextMessages.length > 0) this._history.push(...contextMessages);
-    }
+        const tool = parseToolCall(output);
 
-    this._history.push({ role: 'user', content: task });
+        if (!tool) {
+          const isBrokenTags = output.includes('<tool_call>');
+          const toolNames = [
+            'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
+            'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
+            'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
+            'manage_plan', 'delegate_to_expert', 'save_skill'
+          ];
 
-    for (let step = 1; step <= maxSteps; step++) {
-      if (signal.aborted) break;
-      this.emit({ type: 'step', content: '', step, totalSteps: maxSteps });
+          const forgottenTool = toolNames.find(tn => output.includes(tn));
 
-      let output = '';
-      try {
-        output = await this._streamWithTimeout(step, maxSteps, timeoutMs, signal);
-      } catch (err: any) {
-        this.emit({ type: 'error', content: err.message });
-        break;
-      }
+          if (isBrokenTags || (forgottenTool && output.length < 500)) {
+            const reason = isBrokenTags
+                ? `malformed <tool_call> structure`
+                : `missing <tool_call> tags for ${forgottenTool}`;
 
-      const tool = parseToolCall(output);
+            this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
+            this._history.push({ role: 'assistant', content: output });
 
-      if (!tool) {
-        const isBrokenTags = output.includes('<tool_call>');
-        const toolNames = [
-          'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
-          'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
-          'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
-          'manage_plan', 'delegate_to_expert', 'save_skill'
-        ];
+            const actualTool = forgottenTool || 'list_files';
+            this._history.push({
+              role: 'user',
+              content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
+                  `You tried to use a tool but didn't wrap it correctly.\n` +
+                  `FIX: You MUST use this exact XML format:\n` +
+                  `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
+                  `Please retry.`
+            });
+            continue;
+          }
 
-        const forgottenTool = toolNames.find(tn => output.includes(tn));
+          this.emit({ type: 'answer', content: output });
+          break;
+        }
 
-        if (isBrokenTags || (forgottenTool && output.length < 500)) {
-          const reason = isBrokenTags
-              ? `malformed <tool_call> structure`
-              : `missing <tool_call> tags for ${forgottenTool}`;
+        if (tool.narration) {
+          this.emit({ type: 'narration', content: tool.narration });
+        }
 
-          this.emit({ type: 'narration', content: `⚠️ Виявлено помилку у форматі (${reason}). Прошу агента виправити...` });
-          this._history.push({ role: 'assistant', content: output });
-
-          const actualTool = forgottenTool || 'list_files';
+        if (tool.parseError) {
+          this.emit({
+            type: 'tool_call', content: `Parse error: ${tool.name}`,
+            toolName: tool.name, toolArgs: {},
+          });
+          const errMsg =
+              `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
+              `Error: ${tool.parseError}\n\n` +
+              `REQUIRED FIX:\n` +
+              `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
+              `2. Escape all special chars in JSON strings\n` +
+              `3. Do NOT use single backslash \\ inside JSON strings\n` +
+              `4. If writing/editing files, put the text INSIDE <content>...</content> block AFTER <args>, NOT in the JSON.\n` +
+              `Retry your tool call with correct JSON.`;
+          this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
           this._history.push({
             role: 'user',
-            content: `ERROR: Your tool call is malformed or missing XML tags.\n` +
-                `You tried to use a tool but didn't wrap it correctly.\n` +
-                `FIX: You MUST use this exact XML format:\n` +
-                `<tool_call>\n<name>${actualTool}</name>\n<args>{"path": "."}</args>\n</tool_call>\n` +
-                `Please retry.`
+            content:
+                `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
+                `<output>${errMsg}</output>\n</tool_result>`,
           });
           continue;
         }
 
-        this.emit({ type: 'answer', content: output });
-        break;
-      }
-
-      if (tool.narration) {
-        this.emit({ type: 'narration', content: tool.narration });
-      }
-
-      if (tool.parseError) {
         this.emit({
-          type: 'tool_call', content: `Parse error: ${tool.name}`,
-          toolName: tool.name, toolArgs: {},
+          type: 'tool_call', content: `Calling: ${tool.name}`,
+          toolName: tool.name, toolArgs: tool.args,
         });
-        const errMsg =
-            `TOOL CALL FAILED — could not parse your <args> JSON.\n` +
-            `Error: ${tool.parseError}\n\n` +
-            `REQUIRED FIX:\n` +
-            `1. Use double backslashes in Windows paths: "D:\\\\web_project\\\\file.txt"\n` +
-            `2. Escape all special chars in JSON strings\n` +
-            `3. Do NOT use single backslash \\ inside JSON strings\n` +
-            `Retry your tool call with correct JSON.`;
-        this.emit({ type: 'tool_result', content: errMsg, toolName: tool.name, ok: false });
+
+        const res = await this._executeTool(tool.name, tool.args);
+
+        this.emit({
+          type: 'tool_result', content: res.output,
+          toolName: tool.name, ok: res.ok,
+        });
+
+        let historyOutput = res.output;
+        if (historyOutput.length > 8000) {
+          historyOutput = historyOutput.slice(0, 4000) +
+              `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
+              historyOutput.slice(-4000);
+        }
+
+        this._history.push({ role: 'assistant', content: output });
         this._history.push({
           role: 'user',
           content:
-              `<tool_result>\n<name>${tool.name}</name>\n<ok>false</ok>\n` +
-              `<output>${errMsg}</output>\n</tool_result>`,
+              `<tool_result>\n` +
+              `<name>${tool.name}</name>\n` +
+              `<ok>${res.ok}</ok>\n` +
+              `<output>${historyOutput}</output>\n` +
+              `</tool_result>`,
         });
-        continue;
+        this._trimHistory();
       }
-
-      this.emit({
-        type: 'tool_call', content: `Calling: ${tool.name}`,
-        toolName: tool.name, toolArgs: tool.args,
-      });
-
-      const res = await this._executeTool(tool.name, tool.args);
-
-      this.emit({
-        type: 'tool_result', content: res.output,
-        toolName: tool.name, ok: res.ok,
-      });
-
-      let historyOutput = res.output;
-      if (historyOutput.length > 8000) {
-        historyOutput = historyOutput.slice(0, 4000) +
-            `\n\n...[TRUNCATED IN HISTORY. You read this in step ${step}]...\n\n` +
-            historyOutput.slice(-4000);
-      }
-
-      this._history.push({ role: 'assistant', content: output });
-      this._history.push({
-        role: 'user',
-        content:
-            `<tool_result>\n` +
-            `<name>${tool.name}</name>\n` +
-            `<ok>${res.ok}</ok>\n` +
-            `<output>${historyOutput}</output>\n` +
-            `</tool_result>`,
-      });
-      this._trimHistory();
-    }
 
     } finally {
       this.running = false;
