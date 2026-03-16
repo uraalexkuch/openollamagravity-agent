@@ -534,6 +534,7 @@ function httpGet(url) {
         const req = lib.get({ hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 80), path: url.pathname + url.search, timeout: 5000 }, (res) => {
             let d = '';
             res.on('data', (c) => { d += c.toString(); });
+            res.on('error', reject);
             res.on('end', () => resolve(d));
         });
         req.on('error', reject);
