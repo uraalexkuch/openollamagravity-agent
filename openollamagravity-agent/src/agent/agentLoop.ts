@@ -348,6 +348,7 @@ export class AgentLoop {
             continue;
           }
 
+          this._history.push({ role: 'assistant', content: output });
           this.emit({ type: 'answer', content: output });
           break;
         }
