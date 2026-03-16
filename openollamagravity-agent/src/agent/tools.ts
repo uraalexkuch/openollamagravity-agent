@@ -25,49 +25,51 @@ export interface LoadedSkill extends SkillMeta {
 }
 
 // --- DEEP AGENTS: Task Planning Memory ---
-interface PlanItem {
+export interface PlanItem {
   id: number;
   task: string;
   status: 'open' | 'done';
 }
 
-let currentPlan: PlanItem[] = [];
-let _planIdCounter = 0;
+export interface PlanState {
+  currentPlan: PlanItem[];
+  planIdCounter: number;
+}
 
-export function managePlan(args: any): ToolResult {
+export function managePlan(args: any, state: PlanState): ToolResult {
   const { action, task, id } = args;
 
   if (action === 'clear') {
-    currentPlan = [];
-    _planIdCounter = 0;
+    state.currentPlan = [];
+    state.planIdCounter = 0;
     return { ok: true, output: 'Plan cleared.' };
   }
 
   if (action === 'create' && task) {
-    _planIdCounter++;
-    currentPlan.push({ id: _planIdCounter, task, status: 'open' });
-    return { ok: true, output: `Task added.\n${formatPlan()}` };
+    state.planIdCounter++;
+    state.currentPlan.push({ id: state.planIdCounter, task, status: 'open' });
+    return { ok: true, output: `Task added.\n${formatPlan(state)}` };
   }
 
   if (action === 'complete' && id !== undefined) {
-    const t = currentPlan.find(p => p.id === Number(id));
+    const t = state.currentPlan.find(p => p.id === Number(id));
     if (t) {
       t.status = 'done';
-      return { ok: true, output: `Task ${id} completed.\n${formatPlan()}` };
+      return { ok: true, output: `Task ${id} completed.\n${formatPlan(state)}` };
     }
     return { ok: false, output: `Task ID ${id} not found.` };
   }
 
   if (action === 'view') {
-    return { ok: true, output: formatPlan() };
+    return { ok: true, output: formatPlan(state) };
   }
 
   return { ok: false, output: 'Invalid action. Use create, complete, view, or clear.' };
 }
 
-function formatPlan(): string {
-  if (currentPlan.length === 0) return 'The plan is empty. Use "create" to add tasks.';
-  return 'CURRENT PLAN:\n' + currentPlan.map(p =>
+function formatPlan(state: PlanState): string {
+  if (state.currentPlan.length === 0) return 'The plan is empty. Use "create" to add tasks.';
+  return 'CURRENT PLAN:\n' + state.currentPlan.map(p =>
       `[${p.status === 'done' ? 'X' : ' '}] ${p.id}. ${p.task}`
   ).join('\n');
 }
@@ -81,26 +83,7 @@ export async function getAllSkills(): Promise<SkillMeta[]> {
   const result: SkillMeta[] = [];
 
   for (const filePath of files) {
-    const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
-    const yaml = readFrontmatter(filePath);
-    if (yaml) {
-      const p = parseYaml(yaml);
-      result.push({
-        filePath, folderName,
-        name:        String(p['name']        || folderName),
-        description: String(p['description'] || ''),
-        domain:      String(p['domain']      || ''),
-        subdomain:   String(p['subdomain']   || ''),
-        tags:        Array.isArray(p['tags']) ? p['tags'] : [],
-        score:       0,
-      });
-    } else {
-      result.push({
-        filePath, folderName,
-        name: folderName, description: '', domain: '', subdomain: '',
-        tags: [], score: 0
-      });
-    }
+    result.push(buildSkillMeta(filePath, skillsPath));
   }
   return result;
 }
@@ -364,15 +347,22 @@ function scoreSkillIdf(
 function scoreSkill(meta: SkillMeta, taskTokens: string[]): number {
   if (taskTokens.length === 0) return 0;
   const queryTokens = expandWithTranslations(taskTokens);
-  const nameT   = tokenize(meta.name + ' ' + meta.folderName);
-  const descT   = tokenize(meta.description);
-  const domainT = tokenize(meta.domain + ' ' + meta.subdomain);
+
+  const tagsSet = new Set(meta.tags);
+  const nameSet = new Set(tokenize(meta.name + ' ' + meta.folderName));
+  const descSet = new Set(tokenize(meta.description));
+  const domainSet = new Set(tokenize(meta.domain + ' ' + meta.subdomain));
+
   let score = 0;
   for (const tw of queryTokens) {
-    if (meta.tags.some(t => t === tw || t.includes(tw) || tw.includes(t)))           score += 3;
-    else if (descT.some(d => d === tw || d.includes(tw) || tw.includes(d)))          score += 2;
-    else if (nameT.some(n => n === tw || n.includes(tw) || tw.includes(n)))          score += 1;
-    else if (domainT.some(d => d.length > 2 && (d.includes(tw) || tw.includes(d))))  score += 1;
+    // Exact match (high priority)
+    if (tagsSet.has(tw)) score += 3;
+    else if (descSet.has(tw)) score += 2;
+    else if (nameSet.has(tw)) score += 1;
+    else if (domainSet.has(tw)) score += 1;
+    // Substring match fallback (lower priority)
+    else if (meta.tags.some(t => t.includes(tw) || tw.includes(t))) score += 1.5;
+    else if (meta.description.toLowerCase().includes(tw)) score += 1;
   }
   return score;
 }
@@ -415,28 +405,7 @@ export function scanAndScoreAllSkillsIdf(
     const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
     if (alreadyLoaded.has(folderName)) continue;
 
-    const yaml = readFrontmatter(filePath);
-    let meta: SkillMeta;
-
-    if (yaml) {
-      const p = parseYaml(yaml);
-      meta = {
-        filePath, folderName,
-        name:        String(p['name']        || folderName),
-        description: String(p['description'] || ''),
-        domain:      String(p['domain']      || ''),
-        subdomain:   String(p['subdomain']   || ''),
-        tags:        Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
-        score:       0,
-      };
-    } else {
-      meta = {
-        filePath, folderName,
-        name: folderName, description: '', domain: '', subdomain: '',
-        tags: tokenize(folderName), score: 0,
-      };
-    }
-
+    const meta = buildSkillMeta(filePath, skillsPath);
     meta.score = scoreSkillIdf(meta, taskTokens, contextTokens, idf);
     if (meta.score >= minScore) scored.push(meta);
   }
@@ -460,28 +429,7 @@ function scanAndScoreAllSkills(
     const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
     if (alreadyLoaded.has(folderName)) continue;
 
-    const yaml = readFrontmatter(filePath);
-    let meta: SkillMeta;
-
-    if (yaml) {
-      const p = parseYaml(yaml);
-      meta = {
-        filePath, folderName,
-        name:        String(p['name']        || folderName),
-        description: String(p['description'] || ''),
-        domain:      String(p['domain']      || ''),
-        subdomain:   String(p['subdomain']   || ''),
-        tags:        Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
-        score:       0,
-      };
-    } else {
-      meta = {
-        filePath, folderName,
-        name: folderName, description: '', domain: '', subdomain: '',
-        tags: tokenize(folderName), score: 0,
-      };
-    }
-
+    const meta = buildSkillMeta(filePath, skillsPath);
     meta.score = scoreSkill(meta, queryTokens);
     if (meta.score >= minScore) scored.push(meta);
   }
@@ -490,7 +438,7 @@ function scanAndScoreAllSkills(
   return scored;
 }
 
-export function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
+function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
   const loaded: LoadedSkill[] = [];
   for (const meta of scored.slice(0, maxSkills)) {
     try {
@@ -502,6 +450,30 @@ export function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSki
     }
   }
   return loaded;
+}
+
+function buildSkillMeta(filePath: string, skillsPath: string): SkillMeta {
+  const folderName = path.relative(skillsPath, path.dirname(filePath)).replace(/\\/g, '/');
+  const yaml = readFrontmatter(filePath);
+
+  if (yaml) {
+    const p = parseYaml(yaml);
+    return {
+      filePath, folderName,
+      name:        String(p['name']        || folderName),
+      description: String(p['description'] || ''),
+      domain:      String(p['domain']      || ''),
+      subdomain:   String(p['subdomain']   || ''),
+      tags:        Array.isArray(p['tags']) ? p['tags'] : tokenize(folderName),
+      score:       0,
+    };
+  }
+
+  return {
+    filePath, folderName,
+    name: folderName, description: '', domain: '', subdomain: '',
+    tags: tokenize(folderName), score: 0,
+  };
 }
 
 export async function autoLoadSkillsForTask(
@@ -797,9 +769,8 @@ export async function readFile(args: any): Promise<ToolResult> {
     const abs = resolvePath(args.path);
     if (!fs.existsSync(abs)) return { ok: false, output: `File not found: ${args.path}` };
     const stat = fs.statSync(abs);
-    const content = fs.readFileSync(abs, 'utf8');
-
     if (args.start_line !== undefined || args.end_line !== undefined) {
+      const content = fs.readFileSync(abs, 'utf8');
       const lines = content.split('\n');
       const start = Math.max(0, (args.start_line || 1) - 1);
       const end   = Math.min(lines.length, args.end_line || lines.length);
@@ -811,14 +782,23 @@ export async function readFile(args: any): Promise<ToolResult> {
     }
 
     if (stat.size > READ_FILE_MAX_BYTES) {
-      return {
-        ok: true,
-        output:
-            content.slice(0, READ_FILE_MAX_BYTES) +
-            `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
-            ` Use specific line ranges if you need more.]`,
-      };
+      const buf = Buffer.alloc(READ_FILE_MAX_BYTES);
+      const fd = fs.openSync(abs, 'r');
+      try {
+        fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0);
+        return {
+          ok: true,
+          output:
+              buf.toString('utf8') +
+              `\n\n[FILE TRUNCATED — file is ${Math.round(stat.size / 1024)}KB, showing first 100KB.` +
+              ` Use specific line ranges if you need more.]`,
+        };
+      } finally {
+        fs.closeSync(fd);
+      }
     }
+
+    const content = fs.readFileSync(abs, 'utf8');
     return { ok: true, output: content };
   } catch (e: any) { return { ok: false, output: e.message }; }
 }

@@ -40,6 +40,9 @@ const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 exports.oogLogger = vscode.window.createOutputChannel('OOG Agent Log');
 class OllamaClient {
+    constructor() {
+        this._dynamicContextCache = new Map();
+    }
     /** Повертає поточну модель з налаштувань */
     get model() {
         return vscode.workspace.getConfiguration('openollamagravity').get('model', 'codellama');
@@ -50,6 +53,8 @@ class OllamaClient {
     /** Оптимізує вікно контексту під конкретну модель на основі її максимальних можливостей */
     getDynamicContext(model) {
         const m = model.toLowerCase();
+        if (this._dynamicContextCache.has(m))
+            return this._dynamicContextCache.get(m);
         const limit = this.cfg('maxDynamicContext', 262144);
         if (m.includes('qwen3')) {
             return Math.min(262144, limit);
@@ -85,7 +90,9 @@ class OllamaClient {
             return Math.min(4096, limit);
         if (m.includes('mxbai'))
             return Math.min(512, limit);
-        return Math.min(4096, limit);
+        const res = Math.min(4096, limit);
+        this._dynamicContextCache.set(m, res);
+        return res;
     }
     async listModels() {
         try {
@@ -97,13 +104,8 @@ class OllamaClient {
         }
     }
     async isAvailable() {
-        try {
-            await this.get('/api/tags');
-            return true;
-        }
-        catch {
-            return false;
-        }
+        const models = await this.listModels();
+        return models.length > 0;
     }
     async chatStream(messages, onChunk, signal, modelOverride) {
         const targetModel = modelOverride || this.model;
@@ -170,7 +172,10 @@ class OllamaClient {
                 res.on('end', () => resolve(full));
             });
             req.on('error', reject);
-            signal?.addEventListener('abort', () => { req.destroy(); resolve(full); });
+            signal?.addEventListener('abort', () => {
+                req.destroy();
+                reject(new Error('Aborted'));
+            });
             req.write(body);
             req.end();
         });
@@ -188,7 +193,10 @@ class OllamaClient {
             const res = await this.post('/api/generate', body, signal);
             return JSON.parse(res).response || '';
         }
-        catch {
+        catch (e) {
+            if (e.message !== 'Aborted') {
+                exports.oogLogger.appendLine(`[Ollama] generate() error: ${e.message}`);
+            }
             return '';
         }
     }

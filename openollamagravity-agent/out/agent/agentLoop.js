@@ -188,7 +188,12 @@ class AgentLoop {
     }
     on(fn) { this._listeners.push(fn); }
     off(fn) { this._listeners = this._listeners.filter(l => l !== fn); }
-    emit(ev) { this._listeners.forEach(l => l(ev)); }
+    emit(ev) {
+        if (this._listeners.length > 20) {
+            client_1.oogLogger.appendLine(`[Agent] ⚠️ Too many listeners (${this._listeners.length}). Possible memory leak.`);
+        }
+        this._listeners.forEach(l => l(ev));
+    }
     stop() { this._abortCtrl?.abort(); this.running = false; }
     clearHistory() {
         this._history = [];
@@ -240,6 +245,7 @@ class AgentLoop {
                     this._history.push(...contextMessages);
             }
             this._history.push({ role: 'user', content: task });
+            this._trimHistory();
             for (let step = 1; step <= maxSteps; step++) {
                 if (signal.aborted)
                     break;
@@ -336,22 +342,51 @@ class AgentLoop {
             this.emit({ type: 'done', content: '' });
         }
     }
-    async _streamWithTimeout(step, total, ms, signal) {
+    _trimHistory() {
+        // Keep system prompt + last 10 pairs (20 messages)
+        if (this._history.length > 22) {
+            const sys = this._history[0];
+            const recent = this._history.slice(-20);
+            this._history = [sys, ...recent];
+            client_1.oogLogger.appendLine(`[Agent] History trimmed to ${this._history.length} messages.`);
+        }
+    }
+    async _streamWithTimeout(step, total, initialMs, signal) {
+        const chunkTimeoutMs = 30000; // Watchdog: 30s between chunks
         return new Promise((resolve, reject) => {
             let started = false;
-            const timer = setTimeout(() => {
+            let watchdog;
+            const resetWatchdog = () => {
+                if (watchdog)
+                    clearTimeout(watchdog);
+                watchdog = setTimeout(() => {
+                    reject(new Error('Streaming stalled: No chunks received for 30s.'));
+                }, chunkTimeoutMs);
+            };
+            const initialTimer = setTimeout(() => {
                 if (!started) {
                     reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
                 }
-            }, ms);
+            }, initialMs);
             this._ollama
                 .chatStream(this._history, chunk => {
-                started = true;
-                clearTimeout(timer);
+                if (!started) {
+                    started = true;
+                    clearTimeout(initialTimer);
+                }
+                resetWatchdog();
                 this.emit({ type: 'thinking', content: chunk, step, totalSteps: total });
             }, signal, this.model)
-                .then(resolve)
-                .catch(reject);
+                .then(res => {
+                if (watchdog)
+                    clearTimeout(watchdog);
+                resolve(res);
+            })
+                .catch(err => {
+                if (watchdog)
+                    clearTimeout(watchdog);
+                reject(err);
+            });
         });
     }
     async _executeTool(name, args) {

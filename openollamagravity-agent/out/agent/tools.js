@@ -65,7 +65,7 @@ const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 let currentPlan = [];
 let _planIdCounter = 0;
-async function managePlan(args) {
+function managePlan(args) {
     const { action, task, id } = args;
     if (action === 'clear') {
         currentPlan = [];
@@ -913,7 +913,13 @@ async function searchFiles(args) {
         const pattern = fileExt ? `**/*${fileExt}` : '**/*';
         const relativePattern = new vscode.RelativePattern(searchBaseUri, pattern);
         const files = await vscode.workspace.findFiles(relativePattern, '**/node_modules/**', 500);
-        const regex = new RegExp(args.pattern, 'i');
+        let regex;
+        try {
+            regex = new RegExp(args.pattern, 'i');
+        }
+        catch (e) {
+            return { ok: false, output: `Invalid regex pattern: ${e.message}` };
+        }
         const results = [];
         const rootFsPath = rootFolder.uri.fsPath;
         for (const uri of files) {
