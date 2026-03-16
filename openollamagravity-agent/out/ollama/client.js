@@ -37,218 +37,146 @@ exports.OllamaClient = exports.oogLogger = void 0;
 // Copyright (c) 2026 Юрій Кучеренко.
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
-const https = __importStar(require("https"));
-exports.oogLogger = vscode.window.createOutputChannel('OOG Agent Log');
+exports.oogLogger = vscode.window.createOutputChannel('OpenOllamaGravity');
 class OllamaClient {
-    constructor() {
-        this._dynamicContextCache = new Map();
-    }
-    /** Повертає поточну модель з налаштувань */
-    get model() {
-        return vscode.workspace.getConfiguration('openollamagravity').get('model', 'codellama');
-    }
-    cfg(key, def) {
-        return vscode.workspace.getConfiguration('openollamagravity').get(key, def);
-    }
-    /** Оптимізує вікно контексту під конкретну модель на основі її максимальних можливостей */
-    getDynamicContext(model) {
-        const m = model.toLowerCase();
-        if (this._dynamicContextCache.has(m))
-            return this._dynamicContextCache.get(m);
-        const limit = this.cfg('maxDynamicContext', 262144);
-        let res;
-        if (m.includes('qwen3')) {
-            res = Math.min(262144, limit);
-        }
-        else if (m.includes('llama3.1') || m.includes('llama3.2') || m.includes('llama3.3') ||
-            (m.includes('gemma3') && !m.includes('1b')) ||
-            m.includes('mistral-large') ||
-            m.includes('phi3') ||
-            m.includes('command-r') ||
-            m.includes('qwen2.5') || m.includes('qwen2-vl') ||
-            m.includes('deepseek-r1') || m.includes('qwq') || m.includes('deepseek-coder-v2') ||
-            m.includes('devstral')) {
-            res = Math.min(131072, limit);
-        }
-        else if (m.includes('codellama')) {
-            res = Math.min(102400, limit);
-        }
-        else if (m.includes('mixtral')) {
-            res = Math.min(65536, limit);
-        }
-        else if (m.includes('mistral') || (m.includes('gemma3') && m.includes('1b'))) {
-            res = Math.min(32768, limit);
-        }
-        else if (m.includes('phi4') || m.includes('starcoder2')) {
-            res = Math.min(16384, limit);
-        }
-        else if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) {
-            res = Math.min(8192, limit);
-        }
-        else if (m.includes('moondream')) {
-            res = Math.min(2048, limit);
-        }
-        else if (m.includes('llava')) {
-            res = Math.min(4096, limit);
-        }
-        else if (m.includes('mxbai')) {
-            res = Math.min(512, limit);
-        }
-        else {
-            res = Math.min(4096, limit);
-        }
-        this._dynamicContextCache.set(m, res);
-        return res;
+    constructor(baseUrl = 'http://127.0.0.1:11434') {
+        this.baseUrl = baseUrl;
     }
     async listModels() {
         try {
-            const res = await this.get('/api/tags');
-            return JSON.parse(res).models || [];
+            const response = await fetch(`${this.baseUrl}/api/tags`);
+            if (!response.ok)
+                throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            return data.models || [];
         }
-        catch {
+        catch (error) {
+            exports.oogLogger.appendLine(`[OllamaClient] listModels error: ${error}`);
             return [];
         }
     }
-    async isAvailable() {
+    /**
+     * Аналізує список доступних моделей на сервері та повертає найоптимальнішу
+     * для завдань кодування, спираючись на налаштування modelTiers (станом на 2026).
+     */
+    async findOptimalModel() {
         const models = await this.listModels();
-        return models.length > 0;
-    }
-    async chatStream(messages, onChunk, signal, modelOverride) {
-        const targetModel = modelOverride || this.model;
-        const ctx = this.getDynamicContext(targetModel);
-        exports.oogLogger.appendLine(`\n[${new Date().toLocaleTimeString()}] 🚀 Генерація: ${targetModel} (Context: ${ctx})`);
-        const body = JSON.stringify({
-            model: targetModel,
-            messages,
-            stream: true,
-            options: { temperature: this.cfg('temperature', 0.15), num_ctx: ctx, num_predict: this.cfg('maxTokens', 4096) }
-        });
-        return new Promise((resolve, reject) => {
-            let full = '';
-            const url = new URL('/api/chat', this.cfg('ollamaUrl', 'http://localhost:11434'));
-            const lib = url.protocol === 'https:' ? https : http;
-            const defaultPort = url.protocol === 'https:' ? 443 : 11434;
-            const req = lib.request({
-                hostname: url.hostname,
-                port: url.port || defaultPort,
-                path: '/api/chat',
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            }, res => {
-                if (res.statusCode && res.statusCode >= 400) {
-                    let errBuf = '';
-                    res.on('data', d => errBuf += d.toString());
-                    res.on('end', () => {
-                        try {
-                            const j = JSON.parse(errBuf);
-                            reject(new Error(`Ollama API Error (${res.statusCode}): ${j.error || errBuf}`));
-                        }
-                        catch {
-                            reject(new Error(`Ollama API HTTP ${res.statusCode}: ${errBuf}`));
-                        }
-                    });
-                    return;
-                }
-                let buf = '';
-                res.on('data', (chunk) => {
-                    if (signal?.aborted) {
-                        req.destroy();
-                        return;
-                    }
-                    buf += chunk.toString();
-                    const lines = buf.split('\n');
-                    buf = lines.pop() ?? '';
-                    for (const line of lines) {
-                        try {
-                            const j = JSON.parse(line);
-                            if (j.error) {
-                                reject(new Error(`Ollama Error: ${j.error}`));
-                                return;
-                            }
-                            if (j.message && typeof j.message.content === 'string') {
-                                full += j.message.content;
-                                onChunk(j.message.content);
-                            }
-                            if (j.done)
-                                resolve(full);
-                        }
-                        catch { }
-                    }
-                });
-                res.on('end', () => resolve(full));
-            });
-            req.on('error', reject);
-            signal?.addEventListener('abort', () => {
-                req.destroy();
-                reject(new Error('Aborted'));
-            });
-            if (signal?.aborted) {
-                req.destroy();
-                reject(new Error('Aborted'));
-                return;
-            }
-            req.write(body);
-            req.end();
-        });
-    }
-    /** Генерація для inlineCompletion та простих запитів (підтримує signal) */
-    async generate(prompt, maxTokens = 256, modelOverride, signal) {
-        const targetModel = modelOverride || this.model;
-        const ctx = this.getDynamicContext(targetModel);
-        const body = JSON.stringify({
-            model: targetModel,
-            prompt, stream: false,
-            options: { num_ctx: Math.min(ctx, 8192), num_predict: maxTokens }
-        });
+        if (!models || models.length === 0)
+            return undefined;
+        // Дефолтний рейтинг моделей станом на 2026 рік
+        const defaultTiers = {
+            "deepseek-r1": 100, "deepseek-v3.2": 100, "qwen3": 100, "glm-5": 100,
+            "llama3.3": 95, "qwen2.5-coder": 95, "devstral": 90, "phi4": 90,
+            "codestral": 90, "yi-coder": 90, "gpt-oss": 90, "minimax-m2.5": 85,
+            "gemma3": 85, "llama3.2": 85, "llama3.1": 80, "qwen2.5": 80,
+            "deepseek-coder-v2": 80, "mistral-large": 80, "starcoder2": 70,
+            "mixtral": 70, "deepseek-coder": 70, "codellama": 60, "llama3": 50,
+            "phi3": -20, "llama2": -50, "llama3.2:1b": -50, "gemma:2b": -50,
+            "gemma2:2b": -50, "qwen:0.5b": -50, "qwen2.5:0.5b": -50, "qwen2.5:1.5b": -50
+        };
+        let modelTiers = defaultTiers;
         try {
-            const res = await this.post('/api/generate', body, signal);
-            return JSON.parse(res).response || '';
+            modelTiers = vscode.workspace
+                .getConfiguration('openollamagravity')
+                .get('modelTiers', defaultTiers);
         }
         catch (e) {
-            if (e.message !== 'Aborted') {
-                exports.oogLogger.appendLine(`[Ollama] generate() error: ${e.message}`);
+            // Fallback
+        }
+        const scoreModel = (name) => {
+            let baseScore = 0;
+            let penalties = 0;
+            const lower = name.toLowerCase();
+            for (const [keyword, tierScore] of Object.entries(modelTiers)) {
+                if (lower.includes(keyword.toLowerCase())) {
+                    if (tierScore > 0) {
+                        baseScore = Math.max(baseScore, tierScore);
+                    }
+                    else {
+                        penalties += tierScore;
+                    }
+                }
             }
-            return '';
+            let finalScore = baseScore + penalties;
+            const sizeMatch = lower.match(/(\d+)(b|m)/);
+            if (sizeMatch) {
+                const size = parseInt(sizeMatch[1], 10);
+                if (sizeMatch[2] === 'b') {
+                    if (size >= 30)
+                        finalScore += 20;
+                    else if (size >= 14)
+                        finalScore += 10;
+                    else if (size >= 7)
+                        finalScore += 5;
+                }
+            }
+            return finalScore;
+        };
+        const sorted = models.sort((a, b) => scoreModel(b.name) - scoreModel(a.name));
+        return sorted[0]?.name;
+    }
+    async generate(prompt, num_predict = 2048, model = 'llama3') {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model,
+                    prompt,
+                    stream: false,
+                    options: { num_predict, temperature: 0.1 }
+                })
+            });
+            if (!response.ok)
+                throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            return data.response;
+        }
+        catch (error) {
+            exports.oogLogger.appendLine(`[OllamaClient] generate error: ${error}`);
+            throw error;
         }
     }
-    async get(p) {
-        return new Promise((res, rej) => {
-            const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
-            const lib = url.protocol === 'https:' ? https : http;
-            const defaultPort = url.protocol === 'https:' ? 443 : 11434;
-            const options = {
-                hostname: url.hostname,
-                port: url.port || defaultPort,
-                path: p,
-            };
-            lib.get(options, r => { let d = ''; r.on('data', (c) => d += c.toString()); r.on('end', () => res(d)); }).on('error', rej);
-        });
-    }
-    async post(p, b, signal) {
-        return new Promise((res, rej) => {
-            const url = new URL(p, this.cfg('ollamaUrl', 'http://localhost:11434'));
-            const lib = url.protocol === 'https:' ? https : http;
-            const defaultPort = url.protocol === 'https:' ? 443 : 11434;
-            const req = lib.request({
-                hostname: url.hostname,
-                port: url.port || defaultPort,
-                path: p,
+    async chatStream(messages, onChunk, signal, model = 'llama3') {
+        return new Promise((resolve, reject) => {
+            const url = new URL(`${this.baseUrl}/api/chat`);
+            const req = http.request(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            }, r => {
-                let d = '';
-                r.on('data', (c) => d += c.toString());
-                r.on('end', () => res(d));
+                headers: { 'Content-Type': 'application/json' },
+                signal
+            }, (res) => {
+                let fullText = '';
+                res.on('data', (chunk) => {
+                    const lines = chunk.toString().split('\n').filter(Boolean);
+                    for (const line of lines) {
+                        try {
+                            const parsed = JSON.parse(line);
+                            if (parsed.message?.content) {
+                                fullText += parsed.message.content;
+                                onChunk(parsed.message.content);
+                            }
+                        }
+                        catch (e) {
+                            // ignore parse errors for incomplete chunks
+                        }
+                    }
+                });
+                res.on('end', () => resolve(fullText));
             });
-            req.on('error', rej);
-            // Прив'язка скасування HTTP запиту до AbortController
-            signal?.addEventListener('abort', () => { req.destroy(); rej(new Error('Aborted')); });
-            if (signal?.aborted) {
-                req.destroy();
-                rej(new Error('Aborted'));
-                return;
-            }
-            req.write(b);
+            req.on('error', (e) => {
+                if (signal?.aborted) {
+                    reject(new Error('Aborted'));
+                }
+                else {
+                    reject(e);
+                }
+            });
+            req.write(JSON.stringify({
+                model,
+                messages,
+                stream: true,
+                options: { temperature: 0.1 }
+            }));
             req.end();
         });
     }
