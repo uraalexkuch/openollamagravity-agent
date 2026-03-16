@@ -72,9 +72,9 @@ Put your multi-line content here without escaping quotes or newlines.
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description): Save a new skill. CRITICAL: Put the actual skill text INSIDE a <content>...</content> block AFTER <args>. Do NOT put it in JSON.
+- save_skill(name, description): Save a pattern/best-practice/guide to the global knowledge base for FUTURE TASKS. NOT for current project files.
 - read_file(path, start_line?, end_line?): Read file content.
-- write_file(path): Create/Overwrite file. CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
+- write_file(path): Create/Overwrite project files (code, README, docs/...). CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
 - edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.

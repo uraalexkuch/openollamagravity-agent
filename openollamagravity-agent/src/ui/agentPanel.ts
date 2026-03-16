@@ -137,7 +137,8 @@ export class AgentPanel {
     this._post({ type: 'task_start', text: task });
 
     vscode.commands.executeCommand('setContext', 'openollamagravity.running', true).then(null, console.error);
-    await this._loop.run(task, [], workspaceCtx, language, '', selectedSkills);
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    await this._loop.run(task, [], workspaceCtx, language, workspaceRoot, selectedSkills);
     vscode.commands.executeCommand('setContext', 'openollamagravity.running', false).then(null, console.error);
   }
 
