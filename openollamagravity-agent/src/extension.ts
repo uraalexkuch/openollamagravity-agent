@@ -206,9 +206,8 @@ export async function activate(context: vscode.ExtensionContext) {
       models = list.map((m: any) => m.name);
     } catch { return; }
 
-    const current = configModel();
     const items = models.map(name => ({
-      label: name === current ? `$(check) ${name}` : name,
+      label: name === ollama.model ? `$(check) ${name}` : name,
     }));
     const picked = await vscode.window.showQuickPick(items, { title: 'Оберіть модель' });
     if (picked) {
@@ -225,19 +224,8 @@ function reg(ctx: vscode.ExtensionContext, id: string, fn: () => unknown) {
   ctx.subscriptions.push(vscode.commands.registerCommand(id, fn));
 }
 
-/** Read the currently configured model name from VS Code settings. */
-function configModel(): string {
-  return vscode.workspace
-      .getConfiguration('openollamagravity')
-      .get<string>('model', 'unknown');
-}
-
 async function refreshStatus(ollama: OllamaClient) {
-  // OllamaClient has no isAvailable(); probe by listing models instead
-  let up = false;
-  try { await ollama.listModels(); up = true; } catch { /* offline */ }
-
-  const model = configModel();
+  const up = await ollama.isAvailable();
 
   // Перевіряємо Perplexica (web_search) без блокування
   const perplexicaUrl = vscode.workspace
@@ -245,13 +233,13 @@ async function refreshStatus(ollama: OllamaClient) {
       .get<string>('perplexicaUrl', 'http://localhost:3030');
 
   // Спочатку показуємо базовий статус (до відповіді Perplexica)
-  statusBar.text = up ? `⚡ ${model}` : `⚡ Ollama offline`;
+  statusBar.text = up ? `⚡ ${ollama.model}` : `⚡ Ollama offline`;
   statusBar.show();
 
   // Після отримання статусу Perplexica — оновлюємо один раз
   checkPerplexicaAvailable(perplexicaUrl).then(perplexicaUp => {
     const webIcon = perplexicaUp ? ' 🌐' : '';
-    statusBar.text = up ? `⚡ ${model}${webIcon}` : `⚡ Ollama offline`;
+    statusBar.text = up ? `⚡ ${ollama.model}${webIcon}` : `⚡ Ollama offline`;
     if (statusBar.tooltip && perplexicaUp) {
       statusBar.tooltip += `\nPerplexica: ${perplexicaUrl}`;
     }
