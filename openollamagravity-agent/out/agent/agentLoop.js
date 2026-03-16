@@ -64,17 +64,27 @@ Example of a CORRECT tool call for writing/editing (use <content>):
 Put your multi-line content here without escaping quotes or newlines.
 </content>
 </tool_call>
-
-3. STRICT Language Requirement: You MUST ALWAYS provide your "Thinking", explanations, tool narrations, and final answers in the language explicitly specified: ${language}. Under NO circumstances should you use English or any other language for these sections, even if the task is provided in English. Internally, you may use English to optimize your planning and tool parameters, but every part of your output visible to the user MUST be in ${language}.
+3. Language & Translation: The user may provide tasks in various languages. You MUST internally translate the user's request into English to plan your actions and use tools accurately. You MUST conduct all planning, reasoning, and thinking inside <thought> tags (preferably in English). However, you MUST ALWAYS provide your final explanations, narrations, and direct answers to the user in ${language}. Every part of your output that is NOT inside a tag MUST be in ${language}.
 4. Windows Paths: Use double backslashes in JSON args: "C:\\\\path\\\\to\\\\file".
-5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> CONTINUE until done. No complex planning needed.
-6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools. DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
+5. Workflow: TRANSLATE REQUEST TO ENGLISH -> THINK -> CALL TOOL -> GET RESULT -> NARRATE -> CONTINUE until done.
+6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools (e.g., read_file, list_files, get_workspace_info). DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
 7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
+8. FILE CREATION: You have FULL PERMISSION to create, modify, and delete project files (including .html, .css, .js, .ts, etc.). If the user asks for a file, DO NOT say you cannot create it. Use the write_file tool immediately to perform the task.
+9. NARRATION & THOUGHTS:
+   Example of a CORRECT response with thinking:
+   <thought>
+   I need to create documentation. I'll check the current project structure first.
+   </thought>
+   Я перевірю структуру проекту перед початком...
+   <tool_call>
+   <name>list_files</name>
+   <args>{"path": "."}</args>
+   </tool_call>
 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "delete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description): Save a pattern/best-practice/guide to the global knowledge base for FUTURE TASKS. NOT for current project files.
+- save_skill(name, description): Save a pattern/best-practice/guide for FUTURE TASKS. CRITICAL: NEVER use this for project-specific docs. Put the skill text INSIDE a <content> block.
 - read_file(path, start_line?, end_line?): Read file content.
 - write_file(path): Create/Overwrite project files (code, README, docs/...). CRITICAL: Put the file text INSIDE a <content>...</content> block AFTER <args>. Do NOT put content inside the JSON.
 - edit_file(path, start_line, end_line): Replace lines. CRITICAL: Put the new_content INSIDE a <content>...</content> block AFTER <args>. Do NOT put new_content inside the JSON.
@@ -91,12 +101,17 @@ Put your multi-line content here without escaping quotes or newlines.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
 function repairJson(raw) {
-    // 1. Огортаємо ключі без лапок (або з одинарними) у подвійні лапки
-    let result = raw.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
-    // 2. Змінюємо одинарні лапки на подвійні для значень
+    // 1. Ensure it's wrapped in braces if it looks like a key-value list but isn't wrapped
+    let result = raw.trim();
+    if (result && !result.startsWith('{') && result.includes(':')) {
+        result = '{' + result + '}';
+    }
+    // 2. Fix unquoted keys or keys with single quotes
+    result = result.replace(/([{,]\s*)(['"]?)([a-zA-Z0-9_$-]+)\2\s*:/g, '$1"$3":');
+    // 3. Fix values with single quotes
     result = result.replace(/:\s*'([^']*)'/g, (_, inner) => ': "' + inner.replace(/"/g, '\\"') + '"');
     result = result.replace(/,\s*'([^']*)'/g, (_, inner) => ', "' + inner.replace(/"/g, '\\"') + '"');
-    // 3. Виправляємо одинарні бекслеші у шляхах Windows та перенесення рядків
+    // 4. Handle Windows paths and control characters inside strings
     let finalResult = '';
     let inString = false;
     let i = 0;
@@ -128,11 +143,16 @@ function repairJson(raw) {
             const next = result[i + 1] ?? '';
             if (/["\\\/bfnrtu]/.test(next)) {
                 finalResult += ch + next;
+                i += 2;
+            }
+            else if (next === 'u') {
+                finalResult += ch + result.slice(i + 1, i + 6);
+                i += 6;
             }
             else {
-                finalResult += '\\\\' + next;
+                finalResult += '\\\\';
+                i++;
             }
-            i += 2;
             continue;
         }
         if (ch === '"') {
@@ -148,7 +168,16 @@ function parseToolCall(text) {
     if (!block)
         return null;
     const blockStart = text.indexOf('<tool_call>');
-    const narration = text.slice(0, blockStart).trim();
+    let narration = text.slice(0, blockStart === -1 ? undefined : blockStart).trim();
+    let thought = '';
+    const thoughtBlock = narration.match(/<thought>([\s\S]*?)<\/thought>/i);
+    if (thoughtBlock) {
+        thought = thoughtBlock[1].trim();
+        narration = narration.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+    }
+    if (blockStart === -1) {
+        return narration || thought ? { name: '', args: {}, narration, thought } : null;
+    }
     const inner = block[1];
     const nameMatch = inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
         inner.match(/<name>\s*([\w_]+)\s*<\/name>/i); // true fallback
@@ -316,6 +345,9 @@ class AgentLoop {
                     this.emit({ type: 'answer', content: output });
                     break;
                 }
+                if (tool.thought) {
+                    this.emit({ type: 'thinking', content: tool.thought });
+                }
                 if (tool.narration) {
                     this.emit({ type: 'narration', content: tool.narration });
                 }
@@ -421,18 +453,24 @@ class AgentLoop {
         });
     }
     async _executeTool(name, args) {
-        const confirm = async (msg) => (await vscode.window.showWarningMessage(`OOG: ${msg}`, 'Allow', 'Deny')) === 'Allow';
+        const config = vscode.workspace.getConfiguration('openollamagravity');
+        const autoApply = config.get('autoApplyEdits', false);
+        const confirm = async (msg, bypass) => {
+            if (bypass)
+                return true;
+            return (await vscode.window.showWarningMessage(`OOG: ${msg}`, 'Allow', 'Deny')) === 'Allow';
+        };
         switch (name) {
             case 'read_file': return Tools.readFile(args);
-            case 'write_file': return Tools.writeFile(args, p => confirm(`Записати у ${p}`));
-            case 'edit_file': return Tools.editFile(args, (p, d) => confirm(`Редагувати ${p}:\n${d}`));
+            case 'write_file': return Tools.writeFile(args, p => confirm(`Записати у ${p}`, autoApply));
+            case 'edit_file': return Tools.editFile(args, (p, d) => confirm(`Редагувати ${p}:\n${d}`, autoApply));
             case 'list_files': return Tools.listFiles(args);
             case 'search_files': return Tools.searchFiles(args);
-            case 'run_terminal': return Tools.runTerminal(args, c => confirm(`Запустити: ${c}`));
+            case 'run_terminal': return Tools.runTerminal(args, c => confirm(`Запустити: ${c}`, false));
             case 'get_diagnostics': return Tools.getDiagnostics(args);
             case 'get_file_outline': return Tools.getFileOutline(args);
             case 'create_directory': return Tools.createDirectory(args);
-            case 'delete_file': return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`));
+            case 'delete_file': return Tools.deleteFile(args, p => confirm(`Видалити файл ${p}?`, autoApply));
             case 'get_workspace_info': return Tools.getWorkspaceInfo(args);
             case 'list_skills': return Tools.listSkills();
             case 'read_skill': return Tools.readSkill(args);
@@ -441,7 +479,7 @@ class AgentLoop {
                 return Tools.managePlan(args, this._planState);
             }
             case 'save_skill': {
-                return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
+                return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`, false));
             }
             case 'delegate_to_expert': {
                 if (!args.role || !args.question)

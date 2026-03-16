@@ -861,6 +861,10 @@ Licensed under the MIT License. See LICENSE file in the project root for full li
         );
         break;
 
+      case 'narration':
+        addMsg('msg-status', '', '💬 ' + escHtml(ev.content || ''), '');
+        break;
+
       case 'answer':
         thinkLive.style.display = 'none';
         currentThinkEl = null;
