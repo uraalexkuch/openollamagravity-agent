@@ -39,19 +39,15 @@ export interface PlanState {
 export function managePlan(args: any, state: PlanState): ToolResult {
   const { action, task, id } = args;
 
-  if (action === 'clear') {
-    state.currentPlan = [];
-    state.planIdCounter = 0;
-    return { ok: true, output: 'Plan cleared.' };
-  }
-
-  if (action === 'create' && task) {
+  if (action === 'create') {
+    if (!task) return { ok: false, output: 'Error: Missing "task" for create action.' };
     state.planIdCounter++;
     state.currentPlan.push({ id: state.planIdCounter, task, status: 'open' });
     return { ok: true, output: `Task added.\n${formatPlan(state)}` };
   }
 
-  if (action === 'complete' && id !== undefined) {
+  if (action === 'complete') {
+    if (id === undefined) return { ok: false, output: 'Error: Missing "id" for complete action.' };
     const t = state.currentPlan.find(p => p.id === Number(id));
     if (t) {
       t.status = 'done';
@@ -60,11 +56,27 @@ export function managePlan(args: any, state: PlanState): ToolResult {
     return { ok: false, output: `Task ID ${id} not found.` };
   }
 
+  if (action === 'delete') {
+      if (id === undefined) return { ok: false, output: 'Error: Missing "id" for delete action.' };
+      const idx = state.currentPlan.findIndex(p => p.id === Number(id));
+      if (idx !== -1) {
+          state.currentPlan.splice(idx, 1);
+          return { ok: true, output: `Task ${id} deleted.\n${formatPlan(state)}` };
+      }
+      return { ok: false, output: `Task ID ${id} not found.` };
+  }
+
+  if (action === 'clear') {
+    state.currentPlan = [];
+    state.planIdCounter = 0;
+    return { ok: true, output: 'Plan cleared.' };
+  }
+
   if (action === 'view') {
     return { ok: true, output: formatPlan(state) };
   }
 
-  return { ok: false, output: 'Invalid action. Use create, complete, view, or clear.' };
+  return { ok: false, output: `Invalid action "${action}". Use: create, complete, delete, view, or clear.` };
 }
 
 function formatPlan(state: PlanState): string {

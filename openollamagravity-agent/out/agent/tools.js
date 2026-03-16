@@ -145,7 +145,8 @@ function scanSkillFolders(skillsPath) {
         }
     }
     walk(skillsPath);
-    const files = skillMd.length > 0 ? skillMd : legacyMd;
+    // combine both to ensure no skill is lost, removing duplicates if any (though walk should be distinct)
+    const files = Array.from(new Set([...skillMd, ...legacyMd]));
     _skillsCache.set(skillsPath, { files, ts: Date.now() });
     return files;
 }
@@ -513,7 +514,8 @@ async function saveSkill(args, onConfirm) {
         }
         fs.mkdirSync(skillDir, { recursive: true });
         fs.writeFileSync(path.join(skillDir, 'SKILL.md'), fileContent, 'utf8');
-        return { ok: true, output: `Skill "${name}" saved successfully to ${folderName}/SKILL.md in the knowledge base!` };
+        const relativeStoredPath = path.join(folderName, 'SKILL.md').replace(/\\/g, '/');
+        return { ok: true, output: `Skill "${name}" saved successfully to ${relativeStoredPath} in the knowledge base!` };
     }
     catch (e) {
         return { ok: false, output: `Failed to save skill: ${e.message}` };
