@@ -571,7 +571,109 @@ function getPerplexicaUrl(): string {
       .get<string>('perplexicaUrl', 'http://10.1.0.138:3030');
 }
 
-/** 🌐 WEB SEARCH через Perplexica */
+// ── PERPLEXICA PROVIDERS CACHE ────────────────────────────────────────────────
+// Providers are fetched once per session from GET /api/providers and cached.
+// Shape returned by Perplexica ≥ 1.8: { providers: [{ id, name, chatModels, embeddingModels }] }
+interface PerplexicaProvider {
+  id:              string;   // UUID  (v1.8+)
+  name:            string;   // human label, e.g. "Ollama"
+  chatModels:      Array<{ name: string; key: string }>;
+  embeddingModels: Array<{ name: string; key: string }>;
+}
+
+let _providersCache:   PerplexicaProvider[] | null = null;
+let _providersCacheTs: number = 0;
+const PROVIDERS_TTL_MS = 5 * 60 * 1000; // 5 хвилин
+
+function httpGet(url: URL): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.get(
+        { hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 80), path: url.pathname + url.search, timeout: 5000 },
+        (res: any) => {
+          let d = '';
+          res.on('data', (c: Buffer) => { d += c.toString(); });
+          res.on('end', () => resolve(d));
+        }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+async function fetchPerplexicaProviders(baseUrl: string): Promise<PerplexicaProvider[]> {
+  const now = Date.now();
+  if (_providersCache && (now - _providersCacheTs) < PROVIDERS_TTL_MS) {
+    return _providersCache;
+  }
+  try {
+    const raw = await httpGet(new URL('/api/providers', baseUrl));
+    const json = JSON.parse(raw);
+    // Підтримка обох форматів: { providers: [...] } або [...] напряму
+    const list: any[] = Array.isArray(json) ? json : (json.providers || []);
+    _providersCache   = list;
+    _providersCacheTs = now;
+    oogLogger.appendLine(`[WebSearch] Providers fetched: ${list.map((p: any) => p.name).join(', ')}`);
+    return list;
+  } catch (e: any) {
+    oogLogger.appendLine(`[WebSearch] Could not fetch providers: ${e.message}`);
+    return [];
+  }
+}
+
+/**
+ * Будує об'єкти chatModel і embeddingModel для Perplexica ≥ 1.8.
+ *
+ * Перевага порядку:
+ *   1. UUID-формат  { providerId, key }  — якщо провайдер має UUID (рядок з дефісами).
+ *   2. Name-формат  { provider, name }   — для старих версій або якщо UUID відсутній.
+ *
+ * Налаштування (openollamagravity):
+ *   perplexicaChatProvider       — назва провайдера (case-insensitive), default "ollama"
+ *   perplexicaChatModel          — ключ моделі,  default — поточна модель Ollama
+ *   perplexicaEmbeddingProvider  — default "ollama"
+ *   perplexicaEmbeddingModel     — default "nomic-embed-text"
+ */
+async function buildModelFields(baseUrl: string): Promise<{
+  chatModel: Record<string, string>;
+  embeddingModel: Record<string, string>;
+}> {
+  const cfg = vscode.workspace.getConfiguration('openollamagravity');
+  const chatProviderName  = cfg.get<string>('perplexicaChatProvider', 'ollama').toLowerCase();
+  const chatModelKey      = cfg.get<string>('perplexicaChatModel', cfg.get<string>('model', 'llama3.1:latest'));
+  const embedProviderName = cfg.get<string>('perplexicaEmbeddingProvider', 'ollama').toLowerCase();
+  const embedModelKey     = cfg.get<string>('perplexicaEmbeddingModel', 'nomic-embed-text');
+
+  const providers = await fetchPerplexicaProviders(baseUrl);
+
+  function findProvider(name: string): PerplexicaProvider | undefined {
+    return providers.find(p => p.name.toLowerCase() === name || p.id?.toLowerCase() === name);
+  }
+
+  function isUuid(s: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  }
+
+  function makeModelObj(providerName: string, modelKey: string, field: 'chatModels' | 'embeddingModels'): Record<string, string> {
+    const p = findProvider(providerName);
+    if (p && isUuid(p.id)) {
+      // v1.8+ UUID format — офіційно задокументовано
+      const modelEntry = p[field]?.find((m: any) => m.key === modelKey || m.name === modelKey);
+      return { providerId: p.id, key: modelEntry?.key ?? modelKey };
+    }
+    // Fallback: name-based format (pre-UUID versions або якщо /api/providers недоступний)
+    return { provider: providerName, name: modelKey };
+  }
+
+  return {
+    chatModel:      makeModelObj(chatProviderName, chatModelKey,  'chatModels'),
+    embeddingModel: makeModelObj(embedProviderName, embedModelKey, 'embeddingModels'),
+  };
+}
+
+// ── WEB SEARCH ────────────────────────────────────────────────────────────────
+
+/** 🌐 WEB SEARCH через Perplexica 1.12.1+ */
 export async function webSearch(args: any): Promise<ToolResult> {
   let query = String(args?.query || '').trim();
   // Очищення запиту від спецсимволів
@@ -587,32 +689,42 @@ export async function webSearch(args: any): Promise<ToolResult> {
   const perplexicaUrl = getPerplexicaUrl();
   oogLogger.appendLine(`[WebSearch] "${query}"`);
 
+  // Отримуємо chatModel / embeddingModel (з кешем провайдерів)
+  const { chatModel, embeddingModel } = await buildModelFields(perplexicaUrl);
+  oogLogger.appendLine(`[WebSearch] chatModel=${JSON.stringify(chatModel)}  embeddingModel=${JSON.stringify(embeddingModel)}`);
+
   return new Promise((promiseResolve) => {
     try {
-      const url      = new URL('/api/search', perplexicaUrl);
-      const lib      = url.protocol === 'https:' ? https : http;
+      const url = new URL('/api/search', perplexicaUrl);
+      const lib = url.protocol === 'https:' ? https : http;
 
-      // ВИКОРИСТОВУЄМО МІНІМАЛЬНИЙ ПЕЙЛОАД
+      // СТРОГИЙ PAYLOAD ДЛЯ PERPLEXICA 1.12.1+
       const bodyData = JSON.stringify({
         query: query,
-        focusMode: args.focusMode || 'webSearch'
+        sources: ["web"], // focusMode повністю видалено у 1.12.x
+        chatModel,
+        embeddingModel,
+        optimizationMode: args.optimizationMode || "speed",
+        history: []
       });
 
       const req = lib.request(url, {
-        method: 'POST',
+        method:  'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type':   'application/json',
           'Content-Length': Buffer.byteLength(bodyData),
         },
+        timeout: 30_000,  // Perplexica може відповідати повільно (LLM + web)
       }, (res: any) => {
         let buf = '';
         res.on('data', (d: Buffer) => { buf += d.toString(); });
         res.on('end', () => {
+          oogLogger.appendLine(`[WebSearch] HTTP ${res.statusCode}, body length=${buf.length}`);
           if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-            oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
+            oogLogger.appendLine(`[WebSearch] ERROR body: ${buf.slice(0, 500)}`);
             promiseResolve({
               ok: false,
-              output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}`
+              output: `Search failed: HTTP ${res.statusCode}.\n${buf.slice(0, 400)}`,
             });
             return;
           }
@@ -641,6 +753,11 @@ export async function webSearch(args: any): Promise<ToolResult> {
         });
       });
 
+      req.on('timeout', () => {
+        req.destroy();
+        oogLogger.appendLine('[WebSearch] Request timed out after 30s');
+        promiseResolve({ ok: false, output: 'Perplexica request timed out (30s). The model may still be loading.' });
+      });
       req.on('error', (err: Error) => {
         oogLogger.appendLine(`[WebSearch] Error: ${err.message}`);
         promiseResolve({ ok: false, output: `Perplexica connection error: ${err.message}. URL: ${perplexicaUrl}` });
