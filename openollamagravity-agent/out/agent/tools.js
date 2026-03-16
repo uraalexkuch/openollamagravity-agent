@@ -723,6 +723,9 @@ async function readFile(args) {
         if (!fs.existsSync(abs))
             return { ok: false, output: `File not found: ${args.path}` };
         const stat = fs.statSync(abs);
+        if (stat.isDirectory()) {
+            return { ok: false, output: `Path is a directory, not a file: ${args.path}. Use list_files instead.` };
+        }
         if (args.start_line !== undefined || args.end_line !== undefined) {
             const content = fs.readFileSync(abs, 'utf8');
             const lines = content.split('\n');
