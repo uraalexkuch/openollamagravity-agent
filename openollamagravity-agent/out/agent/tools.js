@@ -625,10 +625,11 @@ async function buildModelFields(baseUrl) {
     };
 }
 // ── WEB SEARCH ────────────────────────────────────────────────────────────────
-/** 🌐 WEB SEARCH через Perplexica v1.12.1 */
+/** 🌐 WEB SEARCH через Perplexica 1.12.1+ */
 async function webSearch(args) {
     let query = String(args?.query || '').trim();
-    query = query.replace(/[@#$]/g, ' ').trim();
+    // Очищення запиту від спецсимволів
+    query = query.replace(/[@#$]/g, ' ');
     let website = args?.website || args?.domain;
     if (website) {
         website = String(website).replace(/^https?:\/\//i, '').split('/')[0];
@@ -637,7 +638,7 @@ async function webSearch(args) {
     if (!query)
         return { ok: false, output: 'web_search: вкажіть "query".' };
     const perplexicaUrl = getPerplexicaUrl();
-    client_1.oogLogger.appendLine(`[WebSearch] Query: "${query}" → ${perplexicaUrl}`);
+    client_1.oogLogger.appendLine(`[WebSearch] "${query}"`);
     // Отримуємо chatModel / embeddingModel (з кешем провайдерів)
     const { chatModel, embeddingModel } = await buildModelFields(perplexicaUrl);
     client_1.oogLogger.appendLine(`[WebSearch] chatModel=${JSON.stringify(chatModel)}  embeddingModel=${JSON.stringify(embeddingModel)}`);
@@ -645,13 +646,14 @@ async function webSearch(args) {
         try {
             const url = new URL('/api/search', perplexicaUrl);
             const lib = url.protocol === 'https:' ? https : http;
+            // СТРОГИЙ PAYLOAD ДЛЯ PERPLEXICA 1.12.1+
             const bodyData = JSON.stringify({
-                query,
-                focusMode: args.focusMode || 'webSearch',
-                optimizationMode: args.optimizationMode || 'speed',
+                query: query,
+                sources: ["web"], // focusMode повністю видалено у 1.12.x
                 chatModel,
                 embeddingModel,
-                history: [],
+                optimizationMode: args.optimizationMode || "speed",
+                history: []
             });
             const req = lib.request(url, {
                 method: 'POST',

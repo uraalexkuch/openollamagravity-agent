@@ -218,7 +218,8 @@ export class AgentLoop {
       selectedSkillFolders: string[] = []
   ) {
     this.running    = true;
-    this._abortCtrl = new AbortController();
+    try {
+      this._abortCtrl = new AbortController();
     const signal    = this._abortCtrl.signal;
     const maxSteps  = vscode.workspace
         .getConfiguration('openollamagravity')
