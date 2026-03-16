@@ -84,17 +84,10 @@ class InlineCompletionProvider {
         // Створюємо новий контролер та підв'язуємо скасування від VS Code
         this._abortController = new AbortController();
         token.onCancellationRequested(() => this._abortController?.abort());
-        // generate() accepts (prompt, maxTokens, model?) — no signal param.
-        // We race it against the VS Code cancellation token manually.
-        const suggestionPromise = this.ollama
-            .generate(prompt, Math.min(maxTokens, 256), undefined)
+        // Передаємо signal в generate
+        const suggestion = await this.ollama
+            .generate(prompt, Math.min(maxTokens, 256), undefined, this._abortController.signal)
             .catch(() => '');
-        const cancelPromise = new Promise(resolve => {
-            token.onCancellationRequested(() => resolve(''));
-            // Also resolve empty if the request was superseded
-            this._abortController?.signal.addEventListener('abort', () => resolve(''), { once: true });
-        });
-        const suggestion = await Promise.race([suggestionPromise, cancelPromise]);
         if (id !== this._reqId || token.isCancellationRequested)
             return;
         const trimmed = cleanSuggestion(suggestion, prefix);
