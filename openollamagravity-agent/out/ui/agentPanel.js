@@ -50,7 +50,7 @@ class AgentPanel {
         const panel = vscode.window.createWebviewPanel('openollamagravity.agent', '⚡ OpenOllamaGravity', vscode.ViewColumn.Beside, {
             enableScripts: true,
             retainContextWhenHidden: true,
-            localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources'), vscode.Uri.joinPath(extensionUri, 'src', 'ui')],
+            localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources')],
         });
         const newPanel = new AgentPanel(panel, ollama, extensionUri);
         AgentPanel.panels.push(newPanel);

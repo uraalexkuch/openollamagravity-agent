@@ -1,6 +1,4 @@
-// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
-// Licensed under the MIT License. See LICENSE file in the project root for full license information.
-
+// Copyright (c) 2026 Юрій Кучеренко.
 import * as vscode from 'vscode';
 import { OllamaClient, OllamaMessage, oogLogger } from '../ollama/client';
 import * as Tools from './tools';
@@ -172,7 +170,7 @@ function parseToolCall(text: string): {
   const extractedContent = contentMatch ? contentMatch[1].trim() : null;
 
   // 2. Витягуємо JSON з <args>
-  let raw: string;
+  let raw = '';
   const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
 
   if (argsMatch) {
@@ -525,7 +523,7 @@ QUESTION: ${args.question}`;
         try {
           const answer = await this._ollama.chatStream(
               [{ role: 'user', content: subPrompt }],
-              () => {
+              chunk => {
                 // Пряме прокидання "думання" субагента в основний потік не робимо,
                 // щоб не плутати користувача, але можна додати логування.
               },

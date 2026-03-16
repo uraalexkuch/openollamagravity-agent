@@ -1,6 +1,4 @@
 "use strict";
-// Copyright (c) 2026 Юрій Кучеренко. All rights reserved.
-// Licensed under the MIT License. See LICENSE file in the project root for full license information.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -36,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentLoop = void 0;
+// Copyright (c) 2026 Юрій Кучеренко.
 const vscode = __importStar(require("vscode"));
 const client_1 = require("../ollama/client");
 const Tools = __importStar(require("./tools"));
@@ -160,7 +159,7 @@ function parseToolCall(text) {
     const contentMatch = inner.match(/<content>([\s\S]*?)<\/content>/i) || inner.match(/<content>([\s\S]*)/i);
     const extractedContent = contentMatch ? contentMatch[1].trim() : null;
     // 2. Витягуємо JSON з <args>
-    let raw;
+    let raw = '';
     const argsMatch = inner.match(/<args>([\s\S]*?)<\/args>/i);
     if (argsMatch) {
         raw = argsMatch[1].trim();
@@ -454,7 +453,7 @@ QUESTION: ${args.question}`;
                 const subAbort = new AbortController();
                 const subTimer = setTimeout(() => subAbort.abort(), 60000);
                 try {
-                    const answer = await this._ollama.chatStream([{ role: 'user', content: subPrompt }], () => {
+                    const answer = await this._ollama.chatStream([{ role: 'user', content: subPrompt }], chunk => {
                         // Пряме прокидання "думання" субагента в основний потік не робимо,
                         // щоб не плутати користувача, але можна додати логування.
                     }, subAbort.signal);

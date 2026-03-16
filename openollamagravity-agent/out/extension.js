@@ -82,7 +82,7 @@ function pluralUk(n) {
     }
     return 'ів';
 }
-async function syncSkills(repoPath, skillsPath, isFirstRun, context) {
+async function syncSkills(repoPath, skillsPath, context) {
     return new Promise((resolve) => {
         cp.exec('git --version', (gitCheckErr) => {
             if (gitCheckErr) {
@@ -144,16 +144,14 @@ async function activate(context) {
     await vscode.workspace
         .getConfiguration('openollamagravity')
         .update('skillsPath', skillsPath, vscode.ConfigurationTarget.Global);
-    const isFirstRun = !context.globalState.get('oog.skills_initialized', false);
-    syncSkills(repoPath, skillsPath, isFirstRun, context).catch(console.error);
+    syncSkills(repoPath, skillsPath, context).catch(console.error);
     const ollamaUrl = vscode.workspace.getConfiguration('openollamagravity').get('ollamaUrl', 'http://127.0.0.1:11434');
     const ollama = new client_1.OllamaClient(ollamaUrl);
     // Намагаємося підтягнути оптимальну модель або дефолтну з налаштувань
     ollama.findOptimalModel().then(async (optimalModel) => {
-        let activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model');
+        const activeModel = vscode.workspace.getConfiguration('openollamagravity').get('model');
         if (!activeModel && optimalModel) {
             await vscode.workspace.getConfiguration('openollamagravity').update('model', optimalModel, vscode.ConfigurationTarget.Global);
-            activeModel = optimalModel;
         }
     });
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -189,7 +187,7 @@ async function activate(context) {
             await vscode.workspace
                 .getConfiguration('openollamagravity')
                 .update('model', name, vscode.ConfigurationTarget.Global);
-            refreshStatus(ollama);
+            refreshStatus(ollama).catch(console.error);
         }
     });
 }

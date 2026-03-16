@@ -11,7 +11,6 @@ import * as https from 'https';
 import { OllamaClient } from './ollama/client';
 import { AgentPanel } from './ui/agentPanel';
 import { InlineCompletionProvider } from './inlineCompletion';
-import { gatherContext, getActiveFileContent } from './workspace/context';
 
 let statusBar: vscode.StatusBarItem;
 
@@ -47,7 +46,6 @@ function pluralUk(n: number): string {
 async function syncSkills(
     repoPath: string,
     skillsPath: string,
-    isFirstRun: boolean,
     context: vscode.ExtensionContext
 ): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -136,18 +134,16 @@ export async function activate(context: vscode.ExtensionContext) {
       .getConfiguration('openollamagravity')
       .update('skillsPath', skillsPath, vscode.ConfigurationTarget.Global);
 
-  const isFirstRun = !context.globalState.get('oog.skills_initialized', false);
-
-  syncSkills(repoPath, skillsPath, isFirstRun, context).catch(console.error);
+  syncSkills(repoPath, skillsPath, context).catch(console.error);
 
   const ollamaUrl = vscode.workspace.getConfiguration('openollamagravity').get<string>('ollamaUrl', 'http://127.0.0.1:11434');
   const ollama = new OllamaClient(ollamaUrl);
+  
   // Намагаємося підтягнути оптимальну модель або дефолтну з налаштувань
   ollama.findOptimalModel().then(async optimalModel => {
-    let activeModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model');
+    const activeModel = vscode.workspace.getConfiguration('openollamagravity').get<string>('model');
     if (!activeModel && optimalModel) {
         await vscode.workspace.getConfiguration('openollamagravity').update('model', optimalModel, vscode.ConfigurationTarget.Global);
-        activeModel = optimalModel;
     }
   });
 
@@ -194,7 +190,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await vscode.workspace
           .getConfiguration('openollamagravity')
           .update('model', name, vscode.ConfigurationTarget.Global);
-      refreshStatus(ollama);
+      refreshStatus(ollama).catch(console.error);
     }
   });
 }

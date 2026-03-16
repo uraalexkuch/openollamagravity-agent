@@ -35,7 +35,7 @@ export class AgentPanel {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
-          localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources'), vscode.Uri.joinPath(extensionUri, 'src', 'ui')],
+          localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources')],
         }
     );
     const newPanel = new AgentPanel(panel, ollama, extensionUri);
@@ -164,7 +164,7 @@ export class AgentPanel {
   }
 
   private _getHtml(extensionUri: vscode.Uri, iconUri: vscode.Uri): string {
-    const htmlPath = vscode.Uri.joinPath(extensionUri, 'src', 'ui', 'agentPanel.html').fsPath;
+    const htmlPath = vscode.Uri.joinPath(extensionUri, 'resources', 'agentPanel.html').fsPath;
     let html = fs.readFileSync(htmlPath, 'utf8');
     return html.replace(/\${iconUri}/g, iconUri.toString());
   }
