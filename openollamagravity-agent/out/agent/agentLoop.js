@@ -62,9 +62,9 @@ You are an expert AI software engineer. Complete the task efficiently using the 
 ### TOOLS:
 - manage_plan(action, task?, id?): Manage your multi-step plan. Actions: "create", "complete", "view", "clear". CRITICAL: Always create a plan before complex coding!
 - delegate_to_expert(role, question, context?): Spawn an isolated AI sub-agent (e.g., "Architecture Reviewer", "Python Expert") to solve a specific problem and report back.
-- save_skill(name, description, content): Save a new skill (best practice, code snippet, or lesson learned) to the knowledge base for future use.
+- save_skill(name, description, content): Save a new skill (reusable pattern, best practice, or technical lesson) for future tasks. CRITICAL: NEVER use this for project-specific docs, logs, or analysis.
 - read_file(path, start_line?, end_line?): Read file content.
-- write_file(path, content): Create/Overwrite file.
+- write_file(path, content): Create/Overwrite file. Use this for project documentation, configs, and code.
 - edit_file(path, start_line, end_line, new_content): Replace lines.
 - list_files(path?, depth?): List directories.
 - search_files(pattern, path?): Grep-like search.
@@ -140,7 +140,7 @@ function parseToolCall(text) {
     const inner = block[1];
     const nameMatch = inner.match(/<name>\s*([\w_]+)\s*<\/name>/i) ||
         inner.match(/<n>\s*([\w_]+)\s*<\/n>/i) ||
-        inner.match(/<n>\s*([\w_]+)\s*<\/name>/i);
+        inner.match(/<name>\s*([\w_]+)\s*<\/n>/i); // malformed fallback
     if (!nameMatch)
         return null;
     const name = nameMatch[1].trim();
@@ -184,6 +184,7 @@ class AgentLoop {
         this._history = [];
         this._listeners = [];
         this._loadedFolders = new Set();
+        this._planState = { currentPlan: [], planIdCounter: 0 };
         this.running = false;
     }
     on(fn) { this._listeners.push(fn); }
@@ -198,7 +199,7 @@ class AgentLoop {
     clearHistory() {
         this._history = [];
         this._loadedFolders.clear();
-        Tools.managePlan({ action: 'clear' }); // Очищення пам'яті плану
+        this._planState = { currentPlan: [], planIdCounter: 0 };
         client_1.oogLogger.appendLine('[Agent] Історію та план очищено.');
     }
     async run(task, contextMessages = [], workspaceContext = '', language = 'Ukrainian', workspaceRoot = '', selectedSkillFolders = []) {
@@ -245,7 +246,6 @@ class AgentLoop {
                     this._history.push(...contextMessages);
             }
             this._history.push({ role: 'user', content: task });
-            this._trimHistory();
             for (let step = 1; step <= maxSteps; step++) {
                 if (signal.aborted)
                     break;
@@ -335,6 +335,7 @@ class AgentLoop {
                         `<output>${historyOutput}</output>\n` +
                         `</tool_result>`,
                 });
+                this._trimHistory();
             }
         }
         finally {
@@ -365,6 +366,7 @@ class AgentLoop {
             };
             const initialTimer = setTimeout(() => {
                 if (!started) {
+                    this._abortCtrl?.abort();
                     reject(new Error('Ollama не відповіла за таймаутом. Спробуйте меншу модель.'));
                 }
             }, initialMs);
@@ -407,7 +409,7 @@ class AgentLoop {
             case 'read_skill': return Tools.readSkill(args);
             case 'web_search': return Tools.webSearch(args);
             case 'manage_plan': {
-                return Tools.managePlan(args);
+                return Tools.managePlan(args, this._planState);
             }
             case 'save_skill': {
                 return Tools.saveSkill(args, (n, c) => confirm(`Зберегти новий скіл "${n}"?\n\n${c.substring(0, 300)}...`));
@@ -421,7 +423,10 @@ Your goal is to answer the following request from the Main Agent.
 CONTEXT: ${args.context || 'None provided'}
 QUESTION: ${args.question}`;
                 try {
-                    const answer = await this._ollama.generate(subPrompt, 4096);
+                    const answer = await this._ollama.chatStream([{ role: 'user', content: subPrompt }], chunk => {
+                        // Пряме прокидання "думання" субагента в основний потік не робимо,
+                        // щоб не плутати користувача, але можна додати логування.
+                    }, this._abortCtrl?.signal);
                     return { ok: true, output: `Expert [${args.role}] replied:\n\n${answer}` };
                 }
                 catch (e) {

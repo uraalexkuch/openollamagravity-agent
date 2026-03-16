@@ -56,10 +56,11 @@ class OllamaClient {
         if (this._dynamicContextCache.has(m))
             return this._dynamicContextCache.get(m);
         const limit = this.cfg('maxDynamicContext', 262144);
+        let res;
         if (m.includes('qwen3')) {
-            return Math.min(262144, limit);
+            res = Math.min(262144, limit);
         }
-        if (m.includes('llama3.1') || m.includes('llama3.2') || m.includes('llama3.3') ||
+        else if (m.includes('llama3.1') || m.includes('llama3.2') || m.includes('llama3.3') ||
             (m.includes('gemma3') && !m.includes('1b')) ||
             m.includes('mistral-large') ||
             m.includes('phi3') ||
@@ -67,30 +68,35 @@ class OllamaClient {
             m.includes('qwen2.5') || m.includes('qwen2-vl') ||
             m.includes('deepseek-r1') || m.includes('qwq') || m.includes('deepseek-coder-v2') ||
             m.includes('devstral')) {
-            return Math.min(131072, limit);
+            res = Math.min(131072, limit);
         }
-        if (m.includes('codellama')) {
-            return Math.min(102400, limit);
+        else if (m.includes('codellama')) {
+            res = Math.min(102400, limit);
         }
-        if (m.includes('mixtral')) {
-            return Math.min(65536, limit);
+        else if (m.includes('mixtral')) {
+            res = Math.min(65536, limit);
         }
-        if (m.includes('mistral') || (m.includes('gemma3') && m.includes('1b'))) {
-            return Math.min(32768, limit);
+        else if (m.includes('mistral') || (m.includes('gemma3') && m.includes('1b'))) {
+            res = Math.min(32768, limit);
         }
-        if (m.includes('phi4') || m.includes('starcoder2')) {
-            return Math.min(16384, limit);
+        else if (m.includes('phi4') || m.includes('starcoder2')) {
+            res = Math.min(16384, limit);
         }
-        if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) {
-            return Math.min(8192, limit);
+        else if (m.includes('llama3') || m.includes('gemma') || m.includes('nomic-embed') || m.includes('bge-m3')) {
+            res = Math.min(8192, limit);
         }
-        if (m.includes('moondream'))
-            return Math.min(2048, limit);
-        if (m.includes('llava'))
-            return Math.min(4096, limit);
-        if (m.includes('mxbai'))
-            return Math.min(512, limit);
-        const res = Math.min(4096, limit);
+        else if (m.includes('moondream')) {
+            res = Math.min(2048, limit);
+        }
+        else if (m.includes('llava')) {
+            res = Math.min(4096, limit);
+        }
+        else if (m.includes('mxbai')) {
+            res = Math.min(512, limit);
+        }
+        else {
+            res = Math.min(4096, limit);
+        }
         this._dynamicContextCache.set(m, res);
         return res;
     }

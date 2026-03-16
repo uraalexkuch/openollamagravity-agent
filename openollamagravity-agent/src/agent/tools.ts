@@ -438,7 +438,7 @@ function scanAndScoreAllSkills(
   return scored;
 }
 
-function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
+export function loadTopSkills(scored: SkillMeta[], maxSkills: number): LoadedSkill[] {
   const loaded: LoadedSkill[] = [];
   for (const meta of scored.slice(0, maxSkills)) {
     try {
