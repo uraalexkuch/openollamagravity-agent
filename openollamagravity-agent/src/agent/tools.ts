@@ -605,7 +605,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
         },
         embeddingModel: {
           provider: 'ollama',
-          model: 'bge-m3:latest'
+          model: 'nomic-embed-text-v2-moe:latest' // <--- ЗМІНЕНО НА ВАШУ МОДЕЛЬ
         }
       });
 
@@ -623,7 +623,7 @@ export async function webSearch(args: any): Promise<ToolResult> {
             oogLogger.appendLine(`[WebSearch] FAILED ${res.statusCode}: ${buf}`);
             promiseResolve({
               ok: false,
-              output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'bge-m3:latest' is pulled and SearxNG is running.`
+              output: `Search failed: HTTP ${res.statusCode}. Perplexica error: ${buf}. Verify 'nomic-embed-text-v2-moe:latest' is pulled and SearxNG is running.`
             });
             return;
           }

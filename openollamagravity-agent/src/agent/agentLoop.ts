@@ -99,6 +99,7 @@ function repairJson(raw: string): string {
       continue;
     }
 
+    // МАГІЯ ДЛЯ МУЛЬТИРАЙНОВОГО ТЕКСТУ
     if (ch === '\n') {
       finalResult += '\\n';
       i++;
@@ -442,7 +443,7 @@ export class AgentLoop {
 
         this.emit({ type: 'narration', content: `👥 Swarm: Підготовка субагента [${args.role}] та завантаження експертних скілів...` });
 
-        // 1. Автоматично підбираємо найкращі скіли для цього субагента на основі його ролі та питання
+        // 1. Автоматично підбираємо найкращі скіли для цього субагента
         const expertTask = `${args.role} ${args.question}`;
         const expertSkills = await Tools.autoLoadSkillsForTask(expertTask, args.context || '', 3);
 
