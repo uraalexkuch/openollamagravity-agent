@@ -70,7 +70,10 @@ Put your multi-line content here without escaping quotes or newlines.
 6. NO HALLUCINATIONS: Base your answers STRICTLY on the facts obtained through tools (e.g., read_file, list_files, get_workspace_info). DO NOT guess, assume, or invent file contents, dependencies, code snippets, or project architecture.
 7. FACT-BASED ANALYSIS: If asked to analyze or explain a project, you MUST use tools to read the actual project files (package.json, source code) BEFORE generating a response. Talk ONLY about the specific technologies and code present in this repository. If you don't know something, use a tool to find out or admit you don't know.
 8. FILE CREATION: You have FULL PERMISSION to create, modify, and delete project files (including .html, .css, .js, .ts, etc.). If the user asks for a file, DO NOT say you cannot create it. Use the write_file tool immediately to perform the task.
-9. NARRATION & THOUGHTS:
+9. ABSOLUTE PATHS: Always use full paths.
+10. IMMEDIATE ACTION: Use tools right away.
+11. ONE TOOL PER STEP: You can only output ONE <tool_call> at a time. Wait for the tool result before making the next move.
+12. NARRATION & THOUGHTS:
    Example of a CORRECT response with thinking:
    <thought>
    I need to create documentation. I'll check the current project structure first.
@@ -165,9 +168,18 @@ function repairJson(raw) {
     return finalResult;
 }
 function parseToolCall(text) {
-    const block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
-    if (!block)
-        return null;
+    // 1. Спочатку шукаємо закритий блок
+    let block = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
+    // 2. Якщо закритого немає, але тег відкрито - беремо все до кінця
+    if (!block) {
+        const fallbackMatch = text.match(/<tool_call>([\s\S]*)/i);
+        if (fallbackMatch) {
+            block = fallbackMatch;
+        }
+        else {
+            return null;
+        }
+    }
     const blockStart = text.indexOf('<tool_call>');
     let narration = text.slice(0, blockStart === -1 ? undefined : blockStart).trim();
     let thought = '';
@@ -207,7 +219,7 @@ function parseToolCall(text) {
     }
     let args = {};
     if (raw && raw !== '{}') {
-        raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+        raw = raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').replace(/^```\s*/, '').trim();
         try {
             args = JSON.parse(raw);
         }
