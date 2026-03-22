@@ -41,9 +41,20 @@ export function managePlan(args: any, state: PlanState): ToolResult {
 
   if (action === 'create') {
     if (!task) return { ok: false, output: 'Error: Missing "task" for create action.' };
-    state.planIdCounter++;
-    state.currentPlan.push({ id: state.planIdCounter, task, status: 'open' });
-    return { ok: true, output: `Task added.\n${formatPlan(state)}` };
+    
+    // Якщо агент передав свій ID, використовуємо його. Інакше - генеруємо наступний.
+    let newId = state.planIdCounter + 1;
+    if (id !== undefined && !Number.isNaN(Number(id))) {
+      newId = Number(id);
+    }
+    
+    // Синхронізуємо лічильник, щоб уникнути конфліктів у майбутньому
+    state.planIdCounter = Math.max(state.planIdCounter, newId);
+
+    state.currentPlan.push({ id: newId, task, status: 'open' });
+    
+    // Явно повідомляємо агенту, под яким ID збережено завдання
+    return { ok: true, output: `Task added successfully with ID ${newId}.\n${formatPlan(state)}` };
   }
 
   if (action === 'complete') {
@@ -57,13 +68,13 @@ export function managePlan(args: any, state: PlanState): ToolResult {
   }
 
   if (action === 'delete') {
-      if (id === undefined) return { ok: false, output: 'Error: Missing "id" for delete action.' };
-      const idx = state.currentPlan.findIndex(p => p.id === Number(id));
-      if (idx !== -1) {
-          state.currentPlan.splice(idx, 1);
-          return { ok: true, output: `Task ${id} deleted.\n${formatPlan(state)}` };
-      }
-      return { ok: false, output: `Task ID ${id} not found.` };
+    if (id === undefined) return { ok: false, output: 'Error: Missing "id" for delete action.' };
+    const idx = state.currentPlan.findIndex(p => p.id === Number(id));
+    if (idx !== -1) {
+      state.currentPlan.splice(idx, 1);
+      return { ok: true, output: `Task ${id} deleted.\n${formatPlan(state)}` };
+    }
+    return { ok: false, output: `Task ID ${id} not found.` };
   }
 
   if (action === 'clear') {
@@ -625,14 +636,14 @@ async function fetchPerplexicaProviders(baseUrl: string): Promise<PerplexicaProv
  * Будує об'єкти chatModel і embeddingModel для Perplexica ≥ 1.8.
  *
  * Перевага порядку:
- *   1. UUID-формат  { providerId, key }  — якщо провайдер має UUID (рядок з дефісами).
- *   2. Name-формат  { provider, name }   — для старих версій або якщо UUID відсутній.
+ * 1. UUID-формат  { providerId, key }  — якщо провайдер має UUID (рядок з дефісами).
+ * 2. Name-формат  { provider, name }   — для старих версій або якщо UUID відсутній.
  *
  * Налаштування (openollamagravity):
- *   perplexicaChatProvider       — назва провайдера (case-insensitive), default "ollama"
- *   perplexicaChatModel          — ключ моделі,  default — поточна модель Ollama
- *   perplexicaEmbeddingProvider  — default "ollama"
- *   perplexicaEmbeddingModel     — default "nomic-embed-text"
+ * perplexicaChatProvider       — назва провайдера (case-insensitive), default "ollama"
+ * perplexicaChatModel          — ключ моделі,  default — поточна модель Ollama
+ * perplexicaEmbeddingProvider  — default "ollama"
+ * perplexicaEmbeddingModel     — default "nomic-embed-text"
  */
 async function buildModelFields(baseUrl: string): Promise<{
   chatModel: Record<string, string>;
@@ -1135,4 +1146,28 @@ export async function readSkill(args: any): Promise<ToolResult> {
   try {
     return { ok: true, output: fs.readFileSync(match, 'utf8') };
   } catch (e: any) { return { ok: false, output: e.message }; }
+}
+
+export async function openFileInBrowser(args: any): Promise<ToolResult> {
+  try {
+    if (!args.path) return { ok: false, output: 'Помилка: вкажіть "path".' };
+    const abs = resolvePath(args.path);
+    if (!fs.existsSync(abs)) return { ok: false, output: `File not found: ${args.path}` };
+
+    const command = process.platform === 'win32' ? `start "" "${abs}"` :
+        process.platform === 'darwin' ? `open "${abs}"` :
+            `xdg-open "${abs}"`;
+
+    return new Promise((resolve) => {
+      cp.exec(command, (err) => {
+        if (err) {
+          resolve({ ok: false, output: `Failed to open file: ${err.message}` });
+        } else {
+          resolve({ ok: true, output: `Successfully opened ${args.path} in default browser.` });
+        }
+      });
+    });
+  } catch (e: any) {
+    return { ok: false, output: e.message };
+  }
 }

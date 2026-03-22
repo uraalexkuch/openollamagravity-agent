@@ -95,6 +95,7 @@ Put your multi-line content here without escaping quotes or newlines.
 - delete_file(path): Delete file.
 - get_workspace_info(path?): Project metadata (deps, scripts).
 - web_search(query, website?): Internet search.
+- open_file_in_browser(path): Open a file (e.g. .html) in the default web browser.
 - list_skills(), read_skill(name): View best practices.
 ${skillsBlock}${wsBlock}${rootBlock}`.trim();
 }
@@ -358,7 +359,7 @@ export class AgentLoop {
             'read_file', 'write_file', 'edit_file', 'list_files', 'search_files',
             'run_terminal', 'get_diagnostics', 'get_file_outline', 'create_directory',
             'delete_file', 'get_workspace_info', 'web_search', 'list_skills', 'read_skill',
-            'manage_plan', 'delegate_to_expert', 'save_skill'
+            'manage_plan', 'delegate_to_expert', 'save_skill', 'open_file_in_browser'
           ];
 
           const forgottenTool = toolNames.find(tn => output.includes(tn));
@@ -542,6 +543,7 @@ export class AgentLoop {
       case 'list_skills':      return Tools.listSkills();
       case 'read_skill':       return Tools.readSkill(args);
       case 'web_search':       return Tools.webSearch(args);
+      case 'open_file_in_browser': return Tools.openFileInBrowser(args);
 
       case 'manage_plan': {
         return Tools.managePlan(args, this._planState);
@@ -587,7 +589,7 @@ QUESTION: ${args.question}`;
           output:
               `CRITICAL ERROR: Unknown tool "${name}". ` +
               `Valid tools: read_file, write_file, edit_file, list_files, search_files, run_terminal, ` +
-              `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill. ` +
+              `get_diagnostics, get_file_outline, create_directory, delete_file, get_workspace_info, list_skills, read_skill, web_search, manage_plan, delegate_to_expert, save_skill, open_file_in_browser. ` +
               `Fix your <tool_call> and use an exact tool name from the list.`,
         };
       }
